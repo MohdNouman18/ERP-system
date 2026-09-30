@@ -25,8 +25,8 @@ st.set_page_config(
 
 
 # =========================================================
-# TABLE CONFIGURATION
-# IMPORTANT: THESE ARE THE ACTUAL SUPABASE TABLE NAMES
+# SUPABASE TABLE NAMES
+# THESE MUST MATCH SUPABASE EXACTLY
 # =========================================================
 
 TABLES = {
@@ -80,17 +80,24 @@ STOCK_COLUMNS = [
 
 
 # =========================================================
-# LOAD CSS
+# CSS
 # =========================================================
 
 def load_css():
+
     css_path = os.path.join(
         os.path.dirname(__file__),
         "style.css"
     )
 
     if os.path.exists(css_path):
-        with open(css_path, "r", encoding="utf-8") as f:
+
+        with open(
+            css_path,
+            "r",
+            encoding="utf-8"
+        ) as f:
+
             st.markdown(
                 f"<style>{f.read()}</style>",
                 unsafe_allow_html=True
@@ -115,12 +122,14 @@ def get_supabase():
         url = None
         key = None
 
+        # Streamlit Cloud secrets
         try:
             url = st.secrets.get("SUPABASE_URL")
             key = st.secrets.get("SUPABASE_KEY")
         except Exception:
             pass
 
+        # Local environment variables
         if not url:
             url = os.getenv("SUPABASE_URL")
 
@@ -130,9 +139,13 @@ def get_supabase():
         if not url or not key:
             return None
 
-        return create_client(url, key)
+        return create_client(
+            url,
+            key
+        )
 
     except Exception:
+
         return None
 
 
@@ -153,7 +166,11 @@ def sidebar_brand():
     if os.path.exists(logo_path):
 
         try:
-            with open(logo_path, "rb") as image_file:
+
+            with open(
+                logo_path,
+                "rb"
+            ) as image_file:
 
                 logo_base64 = base64.b64encode(
                     image_file.read()
@@ -185,9 +202,11 @@ def sidebar_brand():
     st.sidebar.markdown(
         f"""
         <div class="brand">
+
             {logo_html}
 
             <div>
+
                 <div class="brand-name">
                     FLEX HEAD
                 </div>
@@ -195,7 +214,9 @@ def sidebar_brand():
                 <div class="brand-sub">
                     INDUSTRY PVT LTD
                 </div>
+
             </div>
+
         </div>
         """,
         unsafe_allow_html=True
@@ -206,7 +227,7 @@ sidebar_brand()
 
 
 # =========================================================
-# SIDEBAR NAVIGATION
+# NAVIGATION
 # =========================================================
 
 st.sidebar.markdown(
@@ -227,10 +248,14 @@ page = st.sidebar.radio(
 
 
 # =========================================================
-# HELPER FUNCTIONS
+# GENERAL FUNCTIONS
 # =========================================================
 
-def page_header(kicker, title, description=""):
+def page_header(
+    kicker,
+    title,
+    description=""
+):
 
     st.markdown(
         f"""
@@ -244,12 +269,17 @@ def page_header(kicker, title, description=""):
     st.title(title)
 
     if description:
+
         st.caption(description)
 
 
-def ensure_columns(df, columns):
+def ensure_columns(
+    df,
+    columns
+):
 
     if df is None:
+
         df = pd.DataFrame()
 
     df = df.copy()
@@ -257,12 +287,16 @@ def ensure_columns(df, columns):
     for column in columns:
 
         if column not in df.columns:
+
             df[column] = None
 
     return df
 
 
-def clean_text_columns(df, columns):
+def clean_text_columns(
+    df,
+    columns
+):
 
     df = df.copy()
 
@@ -280,7 +314,10 @@ def clean_text_columns(df, columns):
     return df
 
 
-def convert_numeric(df, columns):
+def convert_numeric_columns(
+    df,
+    columns
+):
 
     df = df.copy()
 
@@ -296,7 +333,10 @@ def convert_numeric(df, columns):
     return df
 
 
-def convert_dates(df, columns):
+def convert_date_columns(
+    df,
+    columns
+):
 
     df = df.copy()
 
@@ -312,18 +352,27 @@ def convert_dates(df, columns):
     return df
 
 
+def safe_float(value):
+
+    try:
+
+        if pd.isna(value):
+            return 0.0
+
+        return float(value)
+
+    except Exception:
+
+        return 0.0
+
+
 # =========================================================
-# SUPABASE FETCH
+# FETCH DATA FROM SUPABASE
 # =========================================================
 
 def fetch_table(module):
 
     if supabase is None:
-
-        st.error(
-            "Supabase is not connected. "
-            "Check SUPABASE_URL and SUPABASE_KEY."
-        )
 
         return pd.DataFrame()
 
@@ -338,9 +387,13 @@ def fetch_table(module):
             .execute()
         )
 
-        data = response.data or []
+        if response.data is None:
 
-        return pd.DataFrame(data)
+            return pd.DataFrame()
+
+        return pd.DataFrame(
+            response.data
+        )
 
     except Exception as e:
 
@@ -352,13 +405,20 @@ def fetch_table(module):
 
 
 # =========================================================
-# CRUD FUNCTIONS
+# CRUD
 # =========================================================
 
-def insert_record(module, data):
+def insert_record(
+    module,
+    data
+):
 
     if supabase is None:
-        return False, "Supabase is not connected."
+
+        return (
+            False,
+            "Supabase connection is not available."
+        )
 
     try:
 
@@ -371,11 +431,17 @@ def insert_record(module, data):
             .execute()
         )
 
-        return True, "Record added successfully."
+        return (
+            True,
+            "Record added successfully."
+        )
 
     except Exception as e:
 
-        return False, str(e)
+        return (
+            False,
+            str(e)
+        )
 
 
 def update_record(
@@ -386,7 +452,11 @@ def update_record(
 ):
 
     if supabase is None:
-        return False, "Supabase is not connected."
+
+        return (
+            False,
+            "Supabase connection is not available."
+        )
 
     try:
 
@@ -396,15 +466,24 @@ def update_record(
             supabase
             .table(table_name)
             .update(data)
-            .eq(id_column, record_id)
+            .eq(
+                id_column,
+                record_id
+            )
             .execute()
         )
 
-        return True, "Record updated successfully."
+        return (
+            True,
+            "Record updated successfully."
+        )
 
     except Exception as e:
 
-        return False, str(e)
+        return (
+            False,
+            str(e)
+        )
 
 
 def delete_record(
@@ -414,7 +493,11 @@ def delete_record(
 ):
 
     if supabase is None:
-        return False, "Supabase is not connected."
+
+        return (
+            False,
+            "Supabase connection is not available."
+        )
 
     try:
 
@@ -424,28 +507,39 @@ def delete_record(
             supabase
             .table(table_name)
             .delete()
-            .eq(id_column, record_id)
+            .eq(
+                id_column,
+                record_id
+            )
             .execute()
         )
 
-        return True, "Record deleted successfully."
+        return (
+            True,
+            "Record deleted successfully."
+        )
 
     except Exception as e:
 
-        return False, str(e)
+        return (
+            False,
+            str(e)
+        )
 
 
 # =========================================================
-# LOAD DATA
+# LOAD DATABASE
 # =========================================================
 
 items = fetch_table("Items")
+
 production = fetch_table("Production")
+
 stock = fetch_table("Stock Control")
 
 
 # =========================================================
-# NORMALIZE ITEMS
+# PREPARE ITEMS
 # =========================================================
 
 items = ensure_columns(
@@ -466,7 +560,7 @@ items = clean_text_columns(
     ]
 )
 
-items = convert_numeric(
+items = convert_numeric_columns(
     items,
     [
         "Nominal_Diameter_mm",
@@ -477,7 +571,7 @@ items = convert_numeric(
 
 
 # =========================================================
-# NORMALIZE PRODUCTION
+# PREPARE PRODUCTION
 # =========================================================
 
 production = ensure_columns(
@@ -496,7 +590,7 @@ production = clean_text_columns(
     ]
 )
 
-production = convert_numeric(
+production = convert_numeric_columns(
     production,
     [
         "Planned_Qty_m",
@@ -505,7 +599,7 @@ production = convert_numeric(
     ]
 )
 
-production = convert_dates(
+production = convert_date_columns(
     production,
     [
         "Production_Date"
@@ -514,7 +608,7 @@ production = convert_dates(
 
 
 # =========================================================
-# NORMALIZE STOCK
+# PREPARE STOCK
 # =========================================================
 
 stock = ensure_columns(
@@ -533,7 +627,7 @@ stock = clean_text_columns(
     ]
 )
 
-stock = convert_numeric(
+stock = convert_numeric_columns(
     stock,
     [
         "Opening_Stock_m",
@@ -543,7 +637,7 @@ stock = convert_numeric(
     ]
 )
 
-stock = convert_dates(
+stock = convert_date_columns(
     stock,
     [
         "Stock_Date"
@@ -564,16 +658,10 @@ def dashboard():
     )
 
     # -----------------------------------------------------
-    # KPIs
+    # KPI VALUES
     # -----------------------------------------------------
 
     total_items = len(items)
-
-    total_planned = (
-        production["Planned_Qty_m"]
-        .fillna(0)
-        .sum()
-    )
 
     total_good = (
         production["Good_Qty_m"]
@@ -587,7 +675,7 @@ def dashboard():
         .sum()
     )
 
-    current_stock = (
+    total_stock = (
         stock["Closing_Stock_m"]
         .fillna(0)
         .sum()
@@ -599,17 +687,31 @@ def dashboard():
         .sum()
     )
 
-    if total_good + total_rejected > 0:
+    total_production = (
+        production["Planned_Qty_m"]
+        .fillna(0)
+        .sum()
+    )
+
+    total_output = (
+        total_good + total_rejected
+    )
+
+    if total_output > 0:
 
         yield_rate = (
             total_good /
-            (total_good + total_rejected)
+            total_output
         ) * 100
 
     else:
 
         yield_rate = 0
 
+
+    # -----------------------------------------------------
+    # KPI CARDS
+    # -----------------------------------------------------
 
     c1, c2, c3, c4 = st.columns(4)
 
@@ -640,6 +742,7 @@ def dashboard():
             unsafe_allow_html=True
         )
 
+
     with c2:
 
         st.markdown(
@@ -667,6 +770,7 @@ def dashboard():
             unsafe_allow_html=True
         )
 
+
     with c3:
 
         st.markdown(
@@ -682,7 +786,7 @@ def dashboard():
                 </div>
 
                 <div class="metric-value">
-                    {current_stock:,.0f} m
+                    {total_stock:,.0f} m
                 </div>
 
                 <div class="metric-caption">
@@ -693,6 +797,7 @@ def dashboard():
             """,
             unsafe_allow_html=True
         )
+
 
     with c4:
 
@@ -728,27 +833,26 @@ def dashboard():
     )
 
 
-    # -----------------------------------------------------
-    # CHART ROW 1
-    # -----------------------------------------------------
+    # =====================================================
+    # CHART 1 — PRODUCTION TREND
+    # =====================================================
 
     col1, col2 = st.columns(2)
 
     with col1:
 
-        st.subheader("Production Trend")
+        st.subheader(
+            "Production Trend"
+        )
 
         if not production.empty:
 
             trend = production.copy()
 
-            trend["Production_Date"] = pd.to_datetime(
-                trend["Production_Date"],
-                errors="coerce"
-            )
-
             trend = trend.dropna(
-                subset=["Production_Date"]
+                subset=[
+                    "Production_Date"
+                ]
             )
 
             if not trend.empty:
@@ -758,7 +862,9 @@ def dashboard():
                     .groupby(
                         "Production_Date",
                         as_index=False
-                    )["Good_Qty_m"]
+                    )[
+                        "Good_Qty_m"
+                    ]
                     .sum()
                 )
 
@@ -771,9 +877,9 @@ def dashboard():
                 )
 
                 fig.update_layout(
-                    xaxis_title="Date",
-                    yaxis_title="Good Production (m)",
-                    height=360
+                    height=360,
+                    xaxis_title="Production Date",
+                    yaxis_title="Good Production (m)"
                 )
 
                 st.plotly_chart(
@@ -784,7 +890,7 @@ def dashboard():
             else:
 
                 st.info(
-                    "Production date data is not available."
+                    "Production records exist, but no valid production dates were found."
                 )
 
         else:
@@ -794,17 +900,39 @@ def dashboard():
             )
 
 
+    # =====================================================
+    # CHART 2 — PRODUCTION STATUS
+    # =====================================================
+
     with col2:
 
-        st.subheader("Production Status")
+        st.subheader(
+            "Production Status"
+        )
 
         if not production.empty:
 
+            status_df = production.copy()
+
+            status_df[
+                "Production_Status"
+            ] = (
+                status_df[
+                    "Production_Status"
+                ]
+                .fillna("Unknown")
+                .replace("", "Unknown")
+            )
+
             status = (
-                production
-                .groupby("Production_Status")
+                status_df
+                .groupby(
+                    "Production_Status"
+                )
                 .size()
-                .reset_index(name="Count")
+                .reset_index(
+                    name="Count"
+                )
             )
 
             if not status.empty:
@@ -813,7 +941,7 @@ def dashboard():
                     status,
                     names="Production_Status",
                     values="Count",
-                    hole=0.48,
+                    hole=0.45,
                     template="plotly_white"
                 )
 
@@ -829,7 +957,7 @@ def dashboard():
             else:
 
                 st.info(
-                    "No production status data."
+                    "No production status data available."
                 )
 
         else:
@@ -839,83 +967,140 @@ def dashboard():
             )
 
 
-    # -----------------------------------------------------
-    # CHART ROW 2
-    # -----------------------------------------------------
+    # =====================================================
+    # CHART 3 — STOCK BY ITEM
+    # =====================================================
 
     col3, col4 = st.columns(2)
 
     with col3:
 
-        st.subheader("Stock by Item")
+        st.subheader(
+            "Stock by Item"
+        )
 
         if not stock.empty:
 
-            s = stock.copy()
-            i = items.copy()
+            stock_chart = stock.copy()
 
-            s["Item_ID"] = (
-                s["Item_ID"]
+            stock_chart[
+                "Item_ID"
+            ] = (
+                stock_chart[
+                    "Item_ID"
+                ]
                 .fillna("")
                 .astype(str)
                 .str.strip()
             )
 
-            i["Item_ID"] = (
-                i["Item_ID"]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-            )
-
-            s["Closing_Stock_m"] = pd.to_numeric(
-                s["Closing_Stock_m"],
+            stock_chart[
+                "Closing_Stock_m"
+            ] = pd.to_numeric(
+                stock_chart[
+                    "Closing_Stock_m"
+                ],
                 errors="coerce"
             ).fillna(0)
 
-            i = i[
-                ["Item_ID", "Item_Code"]
-            ].drop_duplicates(
-                subset=["Item_ID"]
+
+            # Create Item Code lookup
+            item_lookup = items[
+                [
+                    "Item_ID",
+                    "Item_Code"
+                ]
+            ].copy()
+
+
+            item_lookup[
+                "Item_ID"
+            ] = (
+                item_lookup[
+                    "Item_ID"
+                ]
+                .fillna("")
+                .astype(str)
+                .str.strip()
             )
 
-            s = s.merge(
-                i,
+
+            item_lookup = (
+                item_lookup
+                .drop_duplicates(
+                    subset=[
+                        "Item_ID"
+                    ]
+                )
+            )
+
+
+            stock_chart = stock_chart.merge(
+                item_lookup,
                 on="Item_ID",
                 how="left"
             )
 
-            s["Item_Code"] = (
-                s["Item_Code"]
-                .fillna(s["Item_ID"])
+
+            stock_chart[
+                "Display_Item"
+            ] = stock_chart[
+                "Item_Code"
+            ].fillna("")
+
+
+            stock_chart[
+                "Display_Item"
+            ] = stock_chart[
+                "Display_Item"
+            ].where(
+                stock_chart[
+                    "Display_Item"
+                ].str.strip() != "",
+                stock_chart[
+                    "Item_ID"
+                ]
             )
 
+
             stock_chart = (
-                s.groupby(
-                    "Item_Code",
+                stock_chart
+                .groupby(
+                    "Display_Item",
                     as_index=False
-                )["Closing_Stock_m"]
+                )[
+                    "Closing_Stock_m"
+                ]
                 .sum()
             )
 
-            fig = px.bar(
-                stock_chart,
-                x="Item_Code",
-                y="Closing_Stock_m",
-                template="plotly_white",
-                text_auto=".2s"
-            )
 
-            fig.update_layout(
-                xaxis_title="Item",
-                yaxis_title="Closing Stock (m)",
-                height=360
-            )
+            if not stock_chart.empty:
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+                fig = px.bar(
+                    stock_chart,
+                    x="Display_Item",
+                    y="Closing_Stock_m",
+                    text_auto=".2s",
+                    template="plotly_white"
+                )
+
+                fig.update_layout(
+                    height=360,
+                    xaxis_title="Item",
+                    yaxis_title="Closing Stock (m)"
+                )
+
+                st.plotly_chart(
+                    fig,
+                    use_container_width=True
+                )
+
+            else:
+
+                st.info(
+                    "No stock quantities available."
+                )
 
         else:
 
@@ -924,11 +1109,17 @@ def dashboard():
             )
 
 
+    # =====================================================
+    # CHART 4 — PRODUCTION QUALITY
+    # =====================================================
+
     with col4:
 
-        st.subheader("Production Quality")
+        st.subheader(
+            "Production Quality"
+        )
 
-        quality_df = pd.DataFrame(
+        quality = pd.DataFrame(
             {
                 "Category": [
                     "Good",
@@ -942,7 +1133,7 @@ def dashboard():
         )
 
         fig = px.bar(
-            quality_df,
+            quality,
             x="Category",
             y="Quantity",
             text_auto=".2s",
@@ -950,9 +1141,9 @@ def dashboard():
         )
 
         fig.update_layout(
+            height=360,
             xaxis_title="",
-            yaxis_title="Quantity (m)",
-            height=360
+            yaxis_title="Quantity (m)"
         )
 
         st.plotly_chart(
@@ -961,11 +1152,45 @@ def dashboard():
         )
 
 
-    # -----------------------------------------------------
-    # RECENT PRODUCTION
-    # -----------------------------------------------------
+    # =====================================================
+    # EXTRA KPIs
+    # =====================================================
 
-    st.subheader("Recent Production")
+    st.subheader(
+        "Operational Summary"
+    )
+
+    a1, a2, a3 = st.columns(3)
+
+    with a1:
+
+        st.metric(
+            "Planned Production",
+            f"{total_production:,.0f} m"
+        )
+
+    with a2:
+
+        st.metric(
+            "Dispatched",
+            f"{total_dispatched:,.0f} m"
+        )
+
+    with a3:
+
+        st.metric(
+            "Rejected",
+            f"{total_rejected:,.0f} m"
+        )
+
+
+    # =====================================================
+    # RECENT PRODUCTION
+    # =====================================================
+
+    st.subheader(
+        "Recent Production"
+    )
 
     if not production.empty:
 
@@ -1002,7 +1227,7 @@ def item_registration():
     )
 
 
-    tab1, tab2, tab3 = st.tabs(
+    add_tab, edit_tab, delete_tab = st.tabs(
         [
             "Add Item",
             "Edit Item",
@@ -1011,15 +1236,19 @@ def item_registration():
     )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # ADD
-    # -----------------------------------------------------
+    # =====================================================
 
-    with tab1:
+    with add_tab:
 
-        st.subheader("Register New Item")
+        st.subheader(
+            "Register New Item"
+        )
 
-        with st.form("add_item_form"):
+        with st.form(
+            "add_item_form"
+        ):
 
             c1, c2, c3 = st.columns(3)
 
@@ -1042,6 +1271,7 @@ def item_registration():
                         "PE-100"
                     ]
                 )
+
 
             with c2:
 
@@ -1067,6 +1297,7 @@ def item_registration():
                     min_value=0.0,
                     step=0.1
                 )
+
 
             with c3:
 
@@ -1116,16 +1347,36 @@ def item_registration():
             else:
 
                 data = {
-                    "Item_ID": item_id.strip(),
-                    "Item_Code": item_code.strip(),
-                    "Material_Grade": material_grade,
-                    "Application": application,
-                    "Nominal_Diameter_mm": nominal_diameter,
-                    "Wall_Thickness_mm": wall_thickness,
-                    "SDR": sdr.strip(),
-                    "Color": color.strip(),
-                    "Standard_Length": standard_length,
-                    "Unit": unit.strip()
+
+                    "Item_ID":
+                        item_id.strip(),
+
+                    "Item_Code":
+                        item_code.strip(),
+
+                    "Material_Grade":
+                        material_grade,
+
+                    "Application":
+                        application,
+
+                    "Nominal_Diameter_mm":
+                        nominal_diameter,
+
+                    "Wall_Thickness_mm":
+                        wall_thickness,
+
+                    "SDR":
+                        sdr.strip(),
+
+                    "Color":
+                        color.strip(),
+
+                    "Standard_Length":
+                        standard_length,
+
+                    "Unit":
+                        unit.strip()
                 }
 
                 success, message = insert_record(
@@ -1143,13 +1394,15 @@ def item_registration():
                     st.error(message)
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # EDIT
-    # -----------------------------------------------------
+    # =====================================================
 
-    with tab2:
+    with edit_tab:
 
-        st.subheader("Edit Item")
+        st.subheader(
+            "Edit Item"
+        )
 
         if items.empty:
 
@@ -1159,22 +1412,28 @@ def item_registration():
 
         else:
 
-            item_ids = items["Item_ID"].tolist()
+            item_ids = items[
+                "Item_ID"
+            ].tolist()
 
             selected_id = st.selectbox(
                 "Select Item",
-                item_ids
+                item_ids,
+                key="edit_item_select"
             )
 
             selected = items[
-                items["Item_ID"] == selected_id
+                items["Item_ID"]
+                == selected_id
             ]
 
             if not selected.empty:
 
                 row = selected.iloc[0]
 
-                with st.form("edit_item_form"):
+                with st.form(
+                    "edit_item_form"
+                ):
 
                     c1, c2, c3 = st.columns(3)
 
@@ -1201,22 +1460,25 @@ def item_registration():
                             )
                         )
 
+
                     with c2:
 
                         edit_diameter = st.number_input(
                             "Nominal Diameter (mm)",
-                            value=float(
-                                row["Nominal_Diameter_mm"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Nominal_Diameter_mm"
+                                ]
                             ),
                             step=0.1
                         )
 
                         edit_wall = st.number_input(
                             "Wall Thickness (mm)",
-                            value=float(
-                                row["Wall_Thickness_mm"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Wall_Thickness_mm"
+                                ]
                             ),
                             step=0.1
                         )
@@ -1227,6 +1489,7 @@ def item_registration():
                                 row["SDR"]
                             )
                         )
+
 
                     with c3:
 
@@ -1239,9 +1502,10 @@ def item_registration():
 
                         edit_length = st.number_input(
                             "Standard Length",
-                            value=float(
-                                row["Standard_Length"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Standard_Length"
+                                ]
                             ),
                             step=1.0
                         )
@@ -1253,25 +1517,44 @@ def item_registration():
                             )
                         )
 
-                    update_button = st.form_submit_button(
+
+                    update = st.form_submit_button(
                         "Update Item",
                         type="primary",
                         use_container_width=True
                     )
 
 
-                if update_button:
+                if update:
 
                     data = {
-                        "Item_Code": edit_code.strip(),
-                        "Material_Grade": edit_grade.strip(),
-                        "Application": edit_application.strip(),
-                        "Nominal_Diameter_mm": edit_diameter,
-                        "Wall_Thickness_mm": edit_wall,
-                        "SDR": edit_sdr.strip(),
-                        "Color": edit_color.strip(),
-                        "Standard_Length": edit_length,
-                        "Unit": edit_unit.strip()
+
+                        "Item_Code":
+                            edit_code.strip(),
+
+                        "Material_Grade":
+                            edit_grade.strip(),
+
+                        "Application":
+                            edit_application.strip(),
+
+                        "Nominal_Diameter_mm":
+                            edit_diameter,
+
+                        "Wall_Thickness_mm":
+                            edit_wall,
+
+                        "SDR":
+                            edit_sdr.strip(),
+
+                        "Color":
+                            edit_color.strip(),
+
+                        "Standard_Length":
+                            edit_length,
+
+                        "Unit":
+                            edit_unit.strip()
                     }
 
                     success, message = update_record(
@@ -1291,13 +1574,15 @@ def item_registration():
                         st.error(message)
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # DELETE
-    # -----------------------------------------------------
+    # =====================================================
 
-    with tab3:
+    with delete_tab:
 
-        st.subheader("Delete Item")
+        st.subheader(
+            "Delete Item"
+        )
 
         if items.empty:
 
@@ -1308,13 +1593,11 @@ def item_registration():
         else:
 
             delete_id = st.selectbox(
-                "Select Item to Delete",
-                items["Item_ID"].tolist(),
-                key="delete_item"
-            )
-
-            st.warning(
-                f"You are about to delete Item: {delete_id}"
+                "Select Item",
+                items[
+                    "Item_ID"
+                ].tolist(),
+                key="delete_item_select"
             )
 
             if st.button(
@@ -1338,13 +1621,11 @@ def item_registration():
                     st.error(message)
 
 
-    # -----------------------------------------------------
-    # DATA TABLE
-    # -----------------------------------------------------
-
     st.divider()
 
-    st.subheader("All Registered Items")
+    st.subheader(
+        "Registered Items"
+    )
 
     st.dataframe(
         items,
@@ -1354,7 +1635,7 @@ def item_registration():
 
 
 # =========================================================
-# PRODUCTION
+# PRODUCTION PAGE
 # =========================================================
 
 def production_page():
@@ -1362,11 +1643,11 @@ def production_page():
     page_header(
         "MANUFACTURING",
         "Production Management",
-        "Create, update and monitor pipe production batches."
+        "Create, update and monitor production batches."
     )
 
 
-    tab1, tab2, tab3 = st.tabs(
+    add_tab, edit_tab, delete_tab = st.tabs(
         [
             "Add Production",
             "Edit Production",
@@ -1375,17 +1656,24 @@ def production_page():
     )
 
 
-    item_list = items["Item_ID"].tolist()
+    item_ids = items[
+        "Item_ID"
+    ].dropna().tolist()
 
-    # -----------------------------------------------------
-    # ADD PRODUCTION
-    # -----------------------------------------------------
 
-    with tab1:
+    # =====================================================
+    # ADD
+    # =====================================================
 
-        st.subheader("Add Production Record")
+    with add_tab:
 
-        with st.form("add_production_form"):
+        st.subheader(
+            "Add Production Record"
+        )
+
+        with st.form(
+            "add_production_form"
+        ):
 
             c1, c2, c3 = st.columns(3)
 
@@ -1396,16 +1684,16 @@ def production_page():
                     placeholder="PRD-001"
                 )
 
-                if item_list:
+                if item_ids:
 
-                    item_id = st.selectbox(
+                    production_item = st.selectbox(
                         "Item ID",
-                        item_list
+                        item_ids
                     )
 
                 else:
 
-                    item_id = st.text_input(
+                    production_item = st.text_input(
                         "Item ID"
                     )
 
@@ -1413,6 +1701,7 @@ def production_page():
                     "Production Date",
                     value=date.today()
                 )
+
 
             with c2:
 
@@ -1431,6 +1720,7 @@ def production_page():
                     min_value=0.0,
                     step=1.0
                 )
+
 
             with c3:
 
@@ -1457,6 +1747,7 @@ def production_page():
                     ]
                 )
 
+
             submit = st.form_submit_button(
                 "Add Production",
                 type="primary",
@@ -1475,11 +1766,12 @@ def production_page():
             else:
 
                 data = {
+
                     "Production_ID":
                         production_id.strip(),
 
                     "Item_ID":
-                        item_id,
+                        production_item,
 
                     "Production_Date":
                         production_date.isoformat(),
@@ -1518,13 +1810,15 @@ def production_page():
                     st.error(message)
 
 
-    # -----------------------------------------------------
-    # EDIT PRODUCTION
-    # -----------------------------------------------------
+    # =====================================================
+    # EDIT
+    # =====================================================
 
-    with tab2:
+    with edit_tab:
 
-        st.subheader("Edit Production")
+        st.subheader(
+            "Edit Production"
+        )
 
         if production.empty:
 
@@ -1540,12 +1834,14 @@ def production_page():
 
             selected_id = st.selectbox(
                 "Select Production Record",
-                production_ids
+                production_ids,
+                key="edit_production_select"
             )
 
             selected = production[
-                production["Production_ID"]
-                == selected_id
+                production[
+                    "Production_ID"
+                ] == selected_id
             ]
 
             if not selected.empty:
@@ -1553,7 +1849,9 @@ def production_page():
                 row = selected.iloc[0]
 
                 current_date = pd.to_datetime(
-                    row["Production_Date"],
+                    row[
+                        "Production_Date"
+                    ],
                     errors="coerce"
                 )
 
@@ -1570,12 +1868,22 @@ def production_page():
                     row["Item_ID"]
                 )
 
-                item_options = item_list.copy()
+                item_options = item_ids.copy()
 
-                if current_item and current_item not in item_options:
-                    item_options.append(current_item)
+                if (
+                    current_item
+                    and current_item
+                    not in item_options
+                ):
 
-                with st.form("edit_production_form"):
+                    item_options.append(
+                        current_item
+                    )
+
+
+                with st.form(
+                    "edit_production_form"
+                ):
 
                     c1, c2, c3 = st.columns(3)
 
@@ -1586,7 +1894,10 @@ def production_page():
                             item_options,
                             index=item_options.index(
                                 current_item
-                            ) if current_item in item_options else 0
+                            )
+                            if current_item
+                            in item_options
+                            else 0
                         )
 
                         edit_date = st.date_input(
@@ -1601,6 +1912,7 @@ def production_page():
                             )
                         )
 
+
                     with c2:
 
                         edit_line = st.text_input(
@@ -1612,34 +1924,38 @@ def production_page():
 
                         edit_planned = st.number_input(
                             "Planned Quantity (m)",
-                            value=float(
-                                row["Planned_Qty_m"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Planned_Qty_m"
+                                ]
                             ),
                             step=1.0
                         )
 
                         edit_good = st.number_input(
                             "Good Quantity (m)",
-                            value=float(
-                                row["Good_Qty_m"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Good_Qty_m"
+                                ]
                             ),
                             step=1.0
                         )
+
 
                     with c3:
 
                         edit_rejected = st.number_input(
                             "Rejected Quantity (m)",
-                            value=float(
-                                row["Rejected_Qty_m"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Rejected_Qty_m"
+                                ]
                             ),
                             step=1.0
                         )
 
-                        status_options = [
+                        statuses = [
                             "Planned",
                             "In Progress",
                             "Completed",
@@ -1648,30 +1964,41 @@ def production_page():
                         ]
 
                         current_status = str(
-                            row["Production_Status"]
+                            row[
+                                "Production_Status"
+                            ]
                         )
 
-                        if current_status not in status_options:
-                            status_options.append(
+                        if (
+                            current_status
+                            and current_status
+                            not in statuses
+                        ):
+
+                            statuses.append(
                                 current_status
                             )
 
                         edit_status = st.selectbox(
                             "Production Status",
-                            status_options,
-                            index=status_options.index(
+                            statuses,
+                            index=statuses.index(
                                 current_status
                             )
+                            if current_status
+                            in statuses
+                            else 0
                         )
 
-                    update_button = st.form_submit_button(
+
+                    update = st.form_submit_button(
                         "Update Production",
                         type="primary",
                         use_container_width=True
                     )
 
 
-                if update_button:
+                if update:
 
                     data = {
 
@@ -1717,13 +2044,15 @@ def production_page():
                         st.error(message)
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # DELETE
-    # -----------------------------------------------------
+    # =====================================================
 
-    with tab3:
+    with delete_tab:
 
-        st.subheader("Delete Production")
+        st.subheader(
+            "Delete Production"
+        )
 
         if production.empty:
 
@@ -1738,11 +2067,7 @@ def production_page():
                 production[
                     "Production_ID"
                 ].tolist(),
-                key="delete_production"
-            )
-
-            st.warning(
-                f"You are about to delete: {delete_id}"
+                key="delete_production_select"
             )
 
             if st.button(
@@ -1766,13 +2091,11 @@ def production_page():
                     st.error(message)
 
 
-    # -----------------------------------------------------
-    # PRODUCTION TABLE
-    # -----------------------------------------------------
-
     st.divider()
 
-    st.subheader("Production Records")
+    st.subheader(
+        "Production Records"
+    )
 
     st.dataframe(
         production,
@@ -1790,11 +2113,11 @@ def stock_control_page():
     page_header(
         "INVENTORY",
         "Stock Control",
-        "Monitor opening stock, production, dispatches and closing inventory."
+        "Manage opening stock, production, dispatches and closing stock."
     )
 
 
-    tab1, tab2, tab3 = st.tabs(
+    add_tab, edit_tab, delete_tab = st.tabs(
         [
             "Add Stock",
             "Edit Stock",
@@ -1803,21 +2126,28 @@ def stock_control_page():
     )
 
 
-    item_list = items["Item_ID"].tolist()
-    production_list = production[
+    item_ids = items[
+        "Item_ID"
+    ].dropna().tolist()
+
+    production_ids = production[
         "Production_ID"
-    ].tolist()
+    ].dropna().tolist()
 
 
-    # -----------------------------------------------------
-    # ADD STOCK
-    # -----------------------------------------------------
+    # =====================================================
+    # ADD
+    # =====================================================
 
-    with tab1:
+    with add_tab:
 
-        st.subheader("Add Stock Record")
+        st.subheader(
+            "Add Stock Record"
+        )
 
-        with st.form("add_stock_form"):
+        with st.form(
+            "add_stock_form"
+        ):
 
             c1, c2, c3 = st.columns(3)
 
@@ -1828,11 +2158,11 @@ def stock_control_page():
                     placeholder="STK-001"
                 )
 
-                if item_list:
+                if item_ids:
 
                     stock_item = st.selectbox(
                         "Item ID",
-                        item_list
+                        item_ids
                     )
 
                 else:
@@ -1841,11 +2171,11 @@ def stock_control_page():
                         "Item ID"
                     )
 
-                if production_list:
+                if production_ids:
 
                     stock_production = st.selectbox(
                         "Production ID",
-                        production_list
+                        production_ids
                     )
 
                 else:
@@ -1853,6 +2183,7 @@ def stock_control_page():
                     stock_production = st.text_input(
                         "Production ID"
                     )
+
 
             with c2:
 
@@ -1871,6 +2202,7 @@ def stock_control_page():
                     min_value=0.0,
                     step=1.0
                 )
+
 
             with c3:
 
@@ -1896,6 +2228,7 @@ def stock_control_page():
                     ]
                 )
 
+
             submit = st.form_submit_button(
                 "Add Stock",
                 type="primary",
@@ -1905,12 +2238,6 @@ def stock_control_page():
 
         if submit:
 
-            closing_stock = (
-                opening_stock
-                + produced_qty
-                - dispatched_qty
-            )
-
             if not stock_id.strip():
 
                 st.error(
@@ -1918,6 +2245,12 @@ def stock_control_page():
                 )
 
             else:
+
+                closing_stock = (
+                    opening_stock
+                    + produced_qty
+                    - dispatched_qty
+                )
 
                 data = {
 
@@ -1967,13 +2300,15 @@ def stock_control_page():
                     st.error(message)
 
 
-    # -----------------------------------------------------
-    # EDIT STOCK
-    # -----------------------------------------------------
+    # =====================================================
+    # EDIT
+    # =====================================================
 
-    with tab2:
+    with edit_tab:
 
-        st.subheader("Edit Stock")
+        st.subheader(
+            "Edit Stock"
+        )
 
         if stock.empty:
 
@@ -1989,12 +2324,14 @@ def stock_control_page():
 
             selected_id = st.selectbox(
                 "Select Stock Record",
-                stock_ids
+                stock_ids,
+                key="edit_stock_select"
             )
 
             selected = stock[
-                stock["Stock_ID"]
-                == selected_id
+                stock[
+                    "Stock_ID"
+                ] == selected_id
             ]
 
             if not selected.empty:
@@ -2002,7 +2339,9 @@ def stock_control_page():
                 row = selected.iloc[0]
 
                 current_date = pd.to_datetime(
-                    row["Stock_Date"],
+                    row[
+                        "Stock_Date"
+                    ],
                     errors="coerce"
                 )
 
@@ -2024,30 +2363,35 @@ def stock_control_page():
                 )
 
 
-                item_options = item_list.copy()
+                item_options = item_ids.copy()
 
                 if (
                     current_item
-                    and current_item not in item_options
+                    and current_item
+                    not in item_options
                 ):
+
                     item_options.append(
                         current_item
                     )
 
 
-                production_options = production_list.copy()
+                production_options = production_ids.copy()
 
                 if (
                     current_production
                     and current_production
                     not in production_options
                 ):
+
                     production_options.append(
                         current_production
                     )
 
 
-                with st.form("edit_stock_form"):
+                with st.form(
+                    "edit_stock_form"
+                ):
 
                     c1, c2, c3 = st.columns(3)
 
@@ -2058,7 +2402,10 @@ def stock_control_page():
                             item_options,
                             index=item_options.index(
                                 current_item
-                            ) if current_item in item_options else 0
+                            )
+                            if current_item
+                            in item_options
+                            else 0
                         )
 
                         edit_production = st.selectbox(
@@ -2066,7 +2413,10 @@ def stock_control_page():
                             production_options,
                             index=production_options.index(
                                 current_production
-                            ) if current_production in production_options else 0
+                            )
+                            if current_production
+                            in production_options
+                            else 0
                         )
 
                         edit_batch = st.text_input(
@@ -2075,6 +2425,7 @@ def stock_control_page():
                                 row["Batch_No"]
                             )
                         )
+
 
                     with c2:
 
@@ -2085,70 +2436,80 @@ def stock_control_page():
 
                         edit_opening = st.number_input(
                             "Opening Stock (m)",
-                            value=float(
-                                row["Opening_Stock_m"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Opening_Stock_m"
+                                ]
                             ),
                             step=1.0
                         )
 
                         edit_produced = st.number_input(
                             "Produced Quantity (m)",
-                            value=float(
-                                row["Produced_Qty_m"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Produced_Qty_m"
+                                ]
                             ),
                             step=1.0
                         )
+
 
                     with c3:
 
                         edit_dispatched = st.number_input(
                             "Dispatched Quantity (m)",
-                            value=float(
-                                row["Dispatched_Qty_m"]
-                                or 0
+                            value=safe_float(
+                                row[
+                                    "Dispatched_Qty_m"
+                                ]
                             ),
                             step=1.0
                         )
 
-                        current_status = str(
-                            row["Stock_Status"]
-                        )
-
-                        status_options = [
+                        statuses = [
                             "Available",
                             "Low Stock",
                             "Out of Stock",
                             "Reserved"
                         ]
 
+                        current_status = str(
+                            row[
+                                "Stock_Status"
+                            ]
+                        )
+
                         if (
                             current_status
                             and current_status
-                            not in status_options
+                            not in statuses
                         ):
-                            status_options.append(
+
+                            statuses.append(
                                 current_status
                             )
 
                         edit_status = st.selectbox(
                             "Stock Status",
-                            status_options,
-                            index=status_options.index(
+                            statuses,
+                            index=statuses.index(
                                 current_status
-                            ) if current_status in status_options else 0
+                            )
+                            if current_status
+                            in statuses
+                            else 0
                         )
 
 
-                    update_button = st.form_submit_button(
+                    update = st.form_submit_button(
                         "Update Stock",
                         type="primary",
                         use_container_width=True
                     )
 
 
-                if update_button:
+                if update:
 
                     closing_stock = (
                         edit_opening
@@ -2203,13 +2564,15 @@ def stock_control_page():
                         st.error(message)
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # DELETE
-    # -----------------------------------------------------
+    # =====================================================
 
-    with tab3:
+    with delete_tab:
 
-        st.subheader("Delete Stock")
+        st.subheader(
+            "Delete Stock"
+        )
 
         if stock.empty:
 
@@ -2224,11 +2587,7 @@ def stock_control_page():
                 stock[
                     "Stock_ID"
                 ].tolist(),
-                key="delete_stock"
-            )
-
-            st.warning(
-                f"You are about to delete: {delete_id}"
+                key="delete_stock_select"
             )
 
             if st.button(
@@ -2252,13 +2611,11 @@ def stock_control_page():
                     st.error(message)
 
 
-    # -----------------------------------------------------
-    # STOCK TABLE
-    # -----------------------------------------------------
-
     st.divider()
 
-    st.subheader("Stock Records")
+    st.subheader(
+        "Stock Records"
+    )
 
     st.dataframe(
         stock,
@@ -2276,21 +2633,15 @@ def custom_analytics():
     page_header(
         "BUSINESS INTELLIGENCE",
         "Custom Analytics",
-        "Select your own dataset, attributes and chart type."
+        "Build your own charts by selecting dataset, attributes and aggregation."
     )
 
 
-    st.info(
-        "Yahan aap apni marzi se table aur attributes "
-        "select karke charts bana sakte hain."
-    )
-
-
-    # -----------------------------------------------------
+    # =====================================================
     # DATASET
-    # -----------------------------------------------------
+    # =====================================================
 
-    dataset_name = st.selectbox(
+    dataset = st.selectbox(
         "1. Select Dataset",
         [
             "Items",
@@ -2300,11 +2651,11 @@ def custom_analytics():
     )
 
 
-    if dataset_name == "Items":
+    if dataset == "Items":
 
         df = items.copy()
 
-    elif dataset_name == "Production":
+    elif dataset == "Production":
 
         df = production.copy()
 
@@ -2316,18 +2667,27 @@ def custom_analytics():
     if df.empty:
 
         st.warning(
-            "Selected dataset is empty."
+            "Selected dataset has no records."
         )
 
         return
 
 
+    # =====================================================
+    # CLEAN COLUMN TYPES FOR ANALYTICS
+    # =====================================================
+
+    for column in df.columns:
+
+        if df[column].dtype == "object":
+
+            df[column] = (
+                df[column]
+                .fillna("Unknown")
+            )
+
+
     all_columns = df.columns.tolist()
-
-
-    # -----------------------------------------------------
-    # DETECT NUMERIC COLUMNS
-    # -----------------------------------------------------
 
     numeric_columns = (
         df
@@ -2339,18 +2699,9 @@ def custom_analytics():
     )
 
 
-    if not numeric_columns:
-
-        st.warning(
-            "Selected table does not contain numeric attributes."
-        )
-
-        return
-
-
-    # -----------------------------------------------------
+    # =====================================================
     # CHART TYPE
-    # -----------------------------------------------------
+    # =====================================================
 
     chart_type = st.selectbox(
         "2. Select Chart Type",
@@ -2378,20 +2729,30 @@ def custom_analytics():
         with c1:
 
             x_column = st.selectbox(
-                "3. Select Category / X Attribute",
+                "3. Category / X Attribute",
                 all_columns
             )
 
         with c2:
 
-            y_column = st.selectbox(
-                "4. Select Numeric Attribute",
-                numeric_columns
-            )
+            if numeric_columns:
+
+                y_column = st.selectbox(
+                    "4. Numeric Attribute",
+                    numeric_columns
+                )
+
+            else:
+
+                st.warning(
+                    "This dataset has no numeric columns."
+                )
+
+                return
 
 
         aggregation = st.selectbox(
-            "5. Select Aggregation",
+            "5. Aggregation",
             [
                 "Sum",
                 "Average",
@@ -2401,10 +2762,6 @@ def custom_analytics():
             ]
         )
 
-
-        # -------------------------------------------------
-        # GROUP DATA
-        # -------------------------------------------------
 
         try:
 
@@ -2464,26 +2821,6 @@ def custom_analytics():
                 )
 
 
-            # Remove missing category values
-
-            grouped = grouped.dropna(
-                subset=[x_column]
-            )
-
-
-            if grouped.empty:
-
-                st.warning(
-                    "No data available for this chart."
-                )
-
-                return
-
-
-            # -------------------------------------------------
-            # CHART
-            # -------------------------------------------------
-
             if chart_type == "Bar":
 
                 fig = px.bar(
@@ -2528,10 +2865,6 @@ def custom_analytics():
             )
 
 
-            # -------------------------------------------------
-            # SHOW DATA
-            # -------------------------------------------------
-
             with st.expander(
                 "View Chart Data"
             ):
@@ -2546,7 +2879,7 @@ def custom_analytics():
         except Exception as e:
 
             st.error(
-                f"Could not create chart: {e}"
+                f"Chart creation error: {e}"
             )
 
 
@@ -2556,22 +2889,31 @@ def custom_analytics():
 
     else:
 
+        if len(numeric_columns) < 2:
+
+            st.warning(
+                "Scatter chart requires at least two numeric columns."
+            )
+
+            return
+
+
         c1, c2 = st.columns(2)
 
         with c1:
 
             x_column = st.selectbox(
-                "3. Select X Axis",
+                "3. X Axis",
                 numeric_columns,
-                key="scatter_x"
+                key="analytics_scatter_x"
             )
 
         with c2:
 
             y_column = st.selectbox(
-                "4. Select Y Axis",
+                "4. Y Axis",
                 numeric_columns,
-                key="scatter_y"
+                key="analytics_scatter_y"
             )
 
 
@@ -2594,22 +2936,6 @@ def custom_analytics():
         )
 
 
-        with st.expander(
-            "View Chart Data"
-        ):
-
-            st.dataframe(
-                df[
-                    [
-                        x_column,
-                        y_column
-                    ]
-                ],
-                use_container_width=True,
-                hide_index=True
-            )
-
-
 # =========================================================
 # DATA MANAGEMENT
 # =========================================================
@@ -2619,7 +2945,7 @@ def data_management():
     page_header(
         "SYSTEM DATA",
         "Data Management",
-        "View the complete data stored in your ERP database."
+        "View and download ERP database records."
     )
 
 
@@ -2635,7 +2961,7 @@ def data_management():
     with tab1:
 
         st.subheader(
-            "Item Registration Data"
+            "Item Registration"
         )
 
         st.dataframe(
@@ -2646,7 +2972,9 @@ def data_management():
 
         csv = items.to_csv(
             index=False
-        ).encode("utf-8")
+        ).encode(
+            "utf-8"
+        )
 
         st.download_button(
             "Download Items CSV",
@@ -2659,7 +2987,7 @@ def data_management():
     with tab2:
 
         st.subheader(
-            "Production Data"
+            "Production"
         )
 
         st.dataframe(
@@ -2670,7 +2998,9 @@ def data_management():
 
         csv = production.to_csv(
             index=False
-        ).encode("utf-8")
+        ).encode(
+            "utf-8"
+        )
 
         st.download_button(
             "Download Production CSV",
@@ -2683,7 +3013,7 @@ def data_management():
     with tab3:
 
         st.subheader(
-            "Stock Control Data"
+            "Stock Control"
         )
 
         st.dataframe(
@@ -2694,7 +3024,9 @@ def data_management():
 
         csv = stock.to_csv(
             index=False
-        ).encode("utf-8")
+        ).encode(
+            "utf-8"
+        )
 
         st.download_button(
             "Download Stock CSV",
