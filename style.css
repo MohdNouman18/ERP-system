@@ -1,0 +1,172 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+.stApp {
+    background: #f5f7fa;
+}
+
+[data-testid="stSidebar"] {
+    background: #101820;
+    border-right: 1px solid #25313b;
+}
+
+[data-testid="stSidebar"] * {
+    color: #e9eef2 !important;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 4px 24px 4px;
+}
+
+.brand-mark {
+    width: 42px;
+    height: 42px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, #1f8a70, #35b58d);
+    color: white;
+    font-weight: 800;
+    letter-spacing: -1px;
+    box-shadow: 0 8px 20px rgba(0,0,0,.22);
+}
+
+.brand-name {
+    font-weight: 800;
+    font-size: 15px;
+    letter-spacing: .4px;
+}
+
+.brand-sub {
+    font-size: 9px;
+    letter-spacing: 1.6px;
+    color: #93a2ad !important;
+    margin-top: 2px;
+}
+
+.page-kicker {
+    color: #21866e;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.8px;
+    margin-bottom: -8px;
+}
+
+h1 {
+    font-weight: 800 !important;
+    letter-spacing: -1px;
+    color: #16212a;
+}
+
+h2, h3 {
+    color: #1c2933;
+    font-weight: 700;
+}
+
+.stCaption {
+    color: #71808c !important;
+}
+
+.metric-card {
+    background: #ffffff;
+    border: 1px solid #e6ebef;
+    border-radius: 15px;
+    padding: 18px;
+    min-height: 142px;
+    box-shadow: 0 5px 18px rgba(16,24,32,.04);
+    position: relative;
+    overflow: hidden;
+}
+
+.metric-card:after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 42px;
+    height: 3px;
+    background: #2b9b7c;
+    border-radius: 0 5px 0 0;
+}
+
+.metric-icon {
+    float: right;
+    color: #2b9b7c;
+    font-size: 21px;
+    font-weight: 700;
+}
+
+.metric-label {
+    font-size: 12px;
+    color: #72808b;
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.metric-value {
+    font-size: 27px;
+    color: #17232c;
+    font-weight: 800;
+    letter-spacing: -1px;
+}
+
+.metric-caption {
+    font-size: 11px;
+    color: #8a969f;
+    margin-top: 8px;
+}
+
+.section-gap {
+    height: 12px;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+    border-bottom: 1px solid #e2e8ec;
+}
+
+.stTabs [data-baseweb="tab"] {
+    font-weight: 600;
+}
+
+div[data-testid="stDataFrame"] {
+    border: 1px solid #e1e7eb;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.stButton > button, .stDownloadButton > button {
+    border-radius: 9px;
+    font-weight: 700;
+    border: 1px solid #d8e0e5;
+}
+
+button[kind="primary"] {
+    background: #21866e !important;
+    border-color: #21866e !important;
+}
+
+.stTextInput input, .stNumberInput input, .stDateInput input,
+[data-baseweb="select"] > div {
+    border-radius: 8px !important;
+}
+
+div[data-testid="stExpander"] {
+    border: 1px solid #e1e7eb;
+    border-radius: 12px;
+    background: #fff;
+}
+
+[data-testid="stMetric"] {
+    background: white;
+    border: 1px solid #e5eaee;
+    padding: 12px;
+    border-radius: 12px;
+}
