@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from supabase import create_client, Client
-from datetime import date, timedelta
-import random
+from datetime import date
 
 
 # =========================================================
@@ -160,7 +159,6 @@ def refresh_all():
 
 
 def rls_hint(err, table, action="insert"):
-    """Returns RLS-aware help string or None."""
     err_low = err.lower()
     if "row-level security" in err_low or "rls" in err_low or "policy" in err_low:
         return (
@@ -223,31 +221,12 @@ with st.sidebar:
             "Production",
             "Stock Control",
             "Analytics",
+            "Custom Charts",
             "Data Management"
         ]
     )
 
     st.markdown("---")
-    st.caption("DATABASE STATUS")
-
-    if items_err:
-        st.error(f"❌ Items: {items_err[:70]}")
-    else:
-        st.success(f"✅ Items — {len(items)} rows")
-
-    if production_err:
-        st.error(f"❌ Production: {production_err[:70]}")
-    elif len(production) == 0:
-        st.warning("⚠️ Production — 0 rows (empty)")
-    else:
-        st.success(f"✅ Production — {len(production)} rows")
-
-    if stock_err:
-        st.error(f"❌ Stock: {stock_err[:70]}")
-    elif len(stock) == 0:
-        st.warning("⚠️ Stock — 0 rows (empty)")
-    else:
-        st.success(f"✅ Stock — {len(stock)} rows")
 
     if st.button("🔄 Refresh Data", use_container_width=True):
         refresh_all()
@@ -264,11 +243,10 @@ st.markdown(
 
 
 # =========================================================
-# GLOBAL EMPTY DATA BANNER
+# DATA BANNER
 # =========================================================
 
 def data_banner():
-    """Show a clear banner explaining why dashboards are empty."""
     no_prod = len(production) == 0 and not production_err
     no_stock = len(stock) == 0 and not stock_err
 
@@ -368,10 +346,8 @@ if page == "Executive Dashboard":
             fig = px.pie(status_df, names="Production_Status", values="Count", hole=0.5)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            empty_state(
-                "No production records found.",
-                "Sidebar → **Production** module → **Add Production** tab se record add karo."
-            )
+            empty_state("No production records found.",
+                        "Sidebar → **Production** module → **Add Production** tab se record add karo.")
 
     with right:
         st.subheader("Production Overview")
@@ -402,10 +378,8 @@ if page == "Executive Dashboard":
         fig.update_layout(xaxis_title="Item", yaxis_title="Closing Stock (m)")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        empty_state(
-            "No stock records found.",
-            "Sidebar → **Stock Control** module → **Add Stock** tab se record add karo."
-        )
+        empty_state("No stock records found.",
+                    "Sidebar → **Stock Control** module → **Add Stock** tab se record add karo.")
 
 
 # =========================================================
@@ -415,7 +389,6 @@ if page == "Executive Dashboard":
 elif page == "Item Registration":
 
     st.title("Item Registration")
-    st.caption("Manage pipe products and specifications.")
 
     if items_err:
         st.error(f"❌ Failed to load Item table: {items_err}")
@@ -542,7 +515,6 @@ elif page == "Item Registration":
 elif page == "Production":
 
     st.title("Production")
-    st.caption("Manage pipe manufacturing production.")
 
     if production_err:
         st.error(f"❌ Failed to load Production table: {production_err}")
@@ -681,7 +653,6 @@ elif page == "Production":
 elif page == "Stock Control":
 
     st.title("Stock Control")
-    st.caption("Manage production inventory and dispatch.")
 
     if stock_err:
         st.error(f"❌ Failed to load Stock table: {stock_err}")
@@ -869,13 +840,243 @@ elif page == "Analytics":
 
 
 # =========================================================
+# CUSTOM CHARTS
+# =========================================================
+
+elif page == "Custom Charts":
+
+    st.title("Custom Charts")
+    st.caption("Apni marzi se charts banao — data source, chart type, axis aur aggregation choose karo.")
+
+    # ---------- Data Source ----------
+    st.markdown("### 1️⃣ Data Source")
+
+    source_options = {
+        "Production": production,
+        "Stock Control": stock,
+        "Item Registration": items,
+    }
+
+    source_name = st.selectbox(
+        "Kaunsa dataset use karna hai?",
+        list(source_options.keys())
+    )
+
+    df = source_options[source_name].copy()
+
+    if df.empty:
+        empty_state(
+            f"**{source_name}** mein koi record nahi hai.",
+            "Pehle us module mein records add karo, phir yahan wapas aao."
+        )
+        st.stop()
+
+    # ---------- Optional filters ----------
+    st.markdown("### 2️⃣ Filters (optional)")
+
+    with st.expander("🔍 Filter apply karo", expanded=False):
+        filter_cols = st.multiselect(
+            "Filter kis column par lagana hai?",
+            options=[c for c in df.columns if df[c].dtype == "object" or df[c].nunique() < 30],
+            default=[]
+        )
+
+        filtered_df = df.copy()
+
+        for col in filter_cols:
+            unique_vals = df[col].dropna().astype(str).unique().tolist()
+            if not unique_vals:
+                continue
+            picked = st.multiselect(f"`{col}` mein se choose karo", unique_vals,
+                                    default=unique_vals, key=f"filter_{col}")
+            filtered_df = filtered_df[filtered_df[col].astype(str).isin(picked)]
+
+    df = filtered_df
+
+    if df.empty:
+        st.warning("Filters ke baad koi data nahi bacha. Filters change karo.")
+        st.stop()
+
+    # ---------- Chart config ----------
+    st.markdown("### 3️⃣ Chart Configuration")
+
+    numeric_cols = [c for c in df.columns
+                    if pd.api.types.is_numeric_dtype(df[c])]
+    all_cols = df.columns.tolist()
+
+    chart_type = st.selectbox(
+        "Chart Type",
+        [
+            "Bar Chart",
+            "Grouped Bar Chart",
+            "Stacked Bar Chart",
+            "Line Chart",
+            "Area Chart",
+            "Pie Chart",
+            "Donut Chart",
+            "Scatter Plot",
+            "Histogram",
+            "Box Plot",
+        ]
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        x_axis = st.selectbox("X-axis (category / group)", all_cols,
+                              index=(all_cols.index("Item_ID") if "Item_ID" in all_cols else 0))
+
+    with c2:
+        if chart_type == "Histogram":
+            y_axis = st.selectbox("Y-axis (numeric)",
+                                  numeric_cols if numeric_cols else ["(no numeric column)"])
+        elif chart_type == "Pie Chart" or chart_type == "Donut Chart":
+            y_axis = st.selectbox("Values (numeric)",
+                                  numeric_cols if numeric_cols else ["(no numeric column)"])
+        else:
+            y_axis = st.selectbox("Y-axis (numeric)",
+                                  numeric_cols if numeric_cols else ["(no numeric column)"])
+
+    with c3:
+        color_by = st.selectbox(
+            "Color / Group by (optional)",
+            ["(none)"] + all_cols,
+            index=0
+        )
+
+    # ---------- Aggregation ----------
+    agg_choice = "None"
+    if chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
+        agg_choice = st.selectbox(
+            "Aggregation (agar ek hi X pe multiple rows hain)",
+            ["sum", "mean", "count", "max", "min"],
+            index=0
+        )
+
+    # ---------- Optional: top N ----------
+    top_n = st.slider("Top N categories dikhao (0 = sab)", 0, 50, 0)
+
+    # ---------- Sort ----------
+    sort_order = st.radio("Sort order", ["Descending", "Ascending", "None"], horizontal=True)
+
+    # ---------- Build chart ----------
+    st.markdown("### 4️⃣ Chart")
+
+    plot_df = df.copy()
+
+    try:
+        # Aggregation
+        if agg_choice != "None" and chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
+            group_cols = [x_axis]
+            if color_by != "(none)" and color_by != x_axis:
+                group_cols.append(color_by)
+
+            if agg_choice == "count":
+                plot_df = (
+                    plot_df.groupby(group_cols)[y_axis]
+                    .count().reset_index()
+                    .rename(columns={y_axis: "count"})
+                )
+                y_plot = "count"
+            else:
+                plot_df = (
+                    plot_df.groupby(group_cols)[y_axis]
+                    .agg(agg_choice).reset_index()
+                )
+                y_plot = y_axis
+        else:
+            y_plot = y_axis
+
+        # Sort + top N
+        if agg_choice != "None" and y_plot in plot_df.columns and sort_order != "None":
+            plot_df = plot_df.sort_values(
+                y_plot, ascending=(sort_order == "Ascending")
+            )
+
+        if top_n > 0 and y_plot in plot_df.columns:
+            plot_df = plot_df.head(top_n)
+
+        # Render
+        if chart_type == "Bar Chart":
+            fig = px.bar(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None),
+                         text_auto=True)
+
+        elif chart_type == "Grouped Bar Chart":
+            fig = px.bar(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None),
+                         barmode="group")
+
+        elif chart_type == "Stacked Bar Chart":
+            fig = px.bar(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None),
+                         barmode="stack")
+
+        elif chart_type == "Line Chart":
+            fig = px.line(plot_df, x=x_axis, y=y_plot,
+                          color=(color_by if color_by != "(none)" else None),
+                          markers=True)
+
+        elif chart_type == "Area Chart":
+            fig = px.area(plot_df, x=x_axis, y=y_plot,
+                          color=(color_by if color_by != "(none)" else None))
+
+        elif chart_type == "Pie Chart":
+            fig = px.pie(plot_df, names=x_axis, values=y_plot)
+
+        elif chart_type == "Donut Chart":
+            fig = px.pie(plot_df, names=x_axis, values=y_plot, hole=0.5)
+
+        elif chart_type == "Scatter Plot":
+            fig = px.scatter(plot_df, x=x_axis, y=y_plot,
+                             color=(color_by if color_by != "(none)" else None))
+
+        elif chart_type == "Histogram":
+            fig = px.histogram(plot_df, x=x_axis,
+                               color=(color_by if color_by != "(none)" else None))
+
+        elif chart_type == "Box Plot":
+            fig = px.box(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None))
+        else:
+            fig = None
+
+        if fig is not None:
+            fig.update_layout(
+                margin=dict(l=10, r=10, t=40, b=10),
+                height=520,
+                legend_title_text=(color_by if color_by != "(none)" else "")
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # ---------- Show underlying data ----------
+        with st.expander("📊 Chart ke peeche ka data dekho"):
+            st.dataframe(plot_df, use_container_width=True, hide_index=True)
+            st.caption(f"{len(plot_df)} row(s)")
+
+        # ---------- Download ----------
+        csv = plot_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "⬇️ Download chart data as CSV",
+            data=csv,
+            file_name=f"custom_chart_{source_name.lower().replace(' ', '_')}.csv",
+            mime="text/csv"
+        )
+
+    except Exception as e:
+        st.error("❌ Chart banane mein error aaya.")
+        st.code(str(e))
+        st.info("Try karo: X-axis aur Y-axis ke different combinations, ya color/group by hata do.")
+
+
+# =========================================================
 # DATA MANAGEMENT
 # =========================================================
 
 elif page == "Data Management":
 
     st.title("Data Management")
-    st.caption("Live Supabase database records + diagnostics.")
+    st.caption("Live database records + diagnostics.")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Item Records", len(items))
@@ -889,7 +1090,7 @@ elif page == "Data Management":
     st.caption(
         "Ye button ek test production + stock record insert karega. "
         "Agar insert success hua, to RLS bilkul theek hai aur aap manually "
-        "bhi records add kar sakte ho. Delete karna ho to Production/Stock module se delete kar do."
+        "bhi records add kar sakte ho."
     )
 
     if items.empty:
@@ -940,18 +1141,11 @@ elif page == "Data Management":
                 hint = rls_hint(str(e), "Production/Stock", "insert")
                 if hint:
                     st.warning(hint)
-                st.info(
-                    "Agar RLS issue hai to Supabase SQL Editor mein chalao:\n\n"
-                    "```sql\n"
-                    "CREATE POLICY \"all_prod\" ON \"Production\" FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);\n"
-                    "CREATE POLICY \"all_stock\" ON \"Stock_Control\" FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);\n"
-                    "```"
-                )
 
     st.markdown("---")
 
     # ---------- DIAGNOSTICS ----------
-    with st.expander("🔧 Table Diagnostics", expanded=True):
+    with st.expander("🔧 Table Diagnostics", expanded=False):
         diag = pd.DataFrame({
             "Table": [ITEM_TABLE, PRODUCTION_TABLE, STOCK_TABLE],
             "Rows Loaded": [len(items), len(production), len(stock)],
@@ -963,18 +1157,6 @@ elif page == "Data Management":
             "Error": [items_err or "-", production_err or "-", stock_err or "-"]
         })
         st.dataframe(diag, use_container_width=True, hide_index=True)
-
-        st.markdown("**Agar table khaali hai to ye SQL Supabase mein chalao:**")
-        st.code(
-            '-- RLS ON + full access for anon\n'
-            'ALTER TABLE "Production"     ENABLE ROW LEVEL SECURITY;\n'
-            'ALTER TABLE "Stock_Control"  ENABLE ROW LEVEL SECURITY;\n\n'
-            'CREATE POLICY "all_prod" ON "Production"\n'
-            '  FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);\n\n'
-            'CREATE POLICY "all_stock" ON "Stock_Control"\n'
-            '  FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);',
-            language="sql"
-        )
 
         if st.button("🔄 Force Reload All Data"):
             refresh_all()
@@ -996,4 +1178,4 @@ elif page == "Data Management":
 # =========================================================
 
 st.markdown("---")
-st.caption("Flex Head Industries Pvt Ltd • ERP Management System • Supabase")
+st.caption("Flex Head Industries Pvt Ltd • ERP Management System")
