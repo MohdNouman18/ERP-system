@@ -1119,4 +1119,4 @@ elif page == "Data Management":
 
 st.markdown("---")
 st.caption(
-    "Flex Head Industries Pvt Ltd • ERP Management System • Supabase"
+    "Flex Head Industries Pvt Ltd • ERP Management System • Supabase" )
