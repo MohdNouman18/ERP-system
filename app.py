@@ -4,39 +4,44 @@ import plotly.express as px
 from supabase import create_client
 
 
-# =========================================================
+# ============================================================
 # PAGE CONFIG
-# =========================================================
+# ============================================================
 
 st.set_page_config(
-    page_title="Flex Head Industry | ERP",
+    page_title="Flex Head Industries | ERP",
     page_icon="🏭",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 
-# =========================================================
+# ============================================================
 # LOAD EXTERNAL CSS
-# =========================================================
+# ============================================================
 
 def load_css():
     try:
         with open("style.css", "r", encoding="utf-8") as f:
-            st.markdown(
-                f"<style>{f.read()}</style>",
-                unsafe_allow_html=True
-            )
+            css = f.read()
+
+        st.markdown(
+            "<style>" + css + "</style>",
+            unsafe_allow_html=True
+        )
+
     except FileNotFoundError:
-        st.warning("style.css file not found. Please keep style.css in the same folder as app.py.")
+        st.warning(
+            "style.css not found. Keep style.css in the same folder as app.py."
+        )
 
 
 load_css()
 
 
-# =========================================================
+# ============================================================
 # CONSTANTS
-# =========================================================
+# ============================================================
 
 COMPANY_NAME = "Flex Head Industries Pvt Ltd"
 
@@ -45,9 +50,48 @@ PRODUCTION_TABLE = "Production"
 STOCK_TABLE = "Stock_Control"
 
 
-# =========================================================
+ITEM_COLUMNS = [
+    "Item_ID",
+    "Item_Code",
+    "Material_Grade",
+    "Application",
+    "Nominal_Diameter_mm",
+    "Wall_Thickness_mm",
+    "SDR",
+    "Color",
+    "Standard_Length",
+    "Unit"
+]
+
+PRODUCTION_COLUMNS = [
+    "Production_ID",
+    "Item_ID",
+    "Production_Date",
+    "Batch_No",
+    "Production_Line",
+    "Planned_Qty_m",
+    "Good_Qty_m",
+    "Rejected_Qty_m",
+    "Production_Status"
+]
+
+STOCK_COLUMNS = [
+    "Stock_ID",
+    "Item_ID",
+    "Production_ID",
+    "Batch_No",
+    "Stock_Date",
+    "Opening_Stock_m",
+    "Produced_Qty_m",
+    "Dispatched_Qty_m",
+    "Closing_Stock_m",
+    "Stock_Status"
+]
+
+
+# ============================================================
 # SUPABASE CONNECTION
-# =========================================================
+# ============================================================
 
 @st.cache_resource
 def get_supabase():
@@ -59,17 +103,48 @@ def get_supabase():
         return create_client(url, key)
 
     except Exception as e:
+
         st.error("Supabase connection failed.")
-        st.error(str(e))
+        st.code(str(e))
         st.stop()
 
 
 supabase = get_supabase()
 
 
-# =========================================================
-# DATA LOADING FUNCTIONS
-# =========================================================
+# ============================================================
+# HELPER
+# ============================================================
+
+def make_dataframe(data, columns):
+
+    df = pd.DataFrame(data or [])
+
+    for column in columns:
+        if column not in df.columns:
+            df[column] = None
+
+    return df[columns]
+
+
+def numeric_columns(df, columns):
+
+    df = df.copy()
+
+    for column in columns:
+
+        if column in df.columns:
+            df[column] = pd.to_numeric(
+                df[column],
+                errors="coerce"
+            ).fillna(0)
+
+    return df
+
+
+# ============================================================
+# LOAD ITEMS
+# ============================================================
 
 @st.cache_data(ttl=5)
 def load_items():
@@ -83,46 +158,37 @@ def load_items():
             .execute()
         )
 
-        data = response.data or []
+        df = make_dataframe(
+            response.data,
+            ITEM_COLUMNS
+        )
 
-        columns = [
-            "Item_ID",
-            "Item_Code",
-            "Material_Grade",
-            "Application",
-            "Nominal_Diameter_mm",
-            "Wall_Thickness_mm",
-            "SDR",
-            "Color",
-            "Standard_Length",
-            "Unit"
-        ]
+        df = numeric_columns(
+            df,
+            [
+                "Nominal_Diameter_mm",
+                "Wall_Thickness_mm",
+                "Standard_Length"
+            ]
+        )
 
-        df = pd.DataFrame(data)
-
-        for col in columns:
-            if col not in df.columns:
-                df[col] = None
-
-        return df[columns]
+        return df
 
     except Exception as e:
 
-        st.error(f"Error loading Item Registration: {e}")
+        st.error(
+            "Item Registration table load error:"
+        )
+        st.code(str(e))
 
-        return pd.DataFrame(columns=[
-            "Item_ID",
-            "Item_Code",
-            "Material_Grade",
-            "Application",
-            "Nominal_Diameter_mm",
-            "Wall_Thickness_mm",
-            "SDR",
-            "Color",
-            "Standard_Length",
-            "Unit"
-        ])
+        return pd.DataFrame(
+            columns=ITEM_COLUMNS
+        )
 
+
+# ============================================================
+# LOAD PRODUCTION
+# ============================================================
 
 @st.cache_data(ttl=5)
 def load_production():
@@ -136,44 +202,37 @@ def load_production():
             .execute()
         )
 
-        data = response.data or []
+        df = make_dataframe(
+            response.data,
+            PRODUCTION_COLUMNS
+        )
 
-        columns = [
-            "Production_ID",
-            "Item_ID",
-            "Production_Date",
-            "Batch_No",
-            "Production_Line",
-            "Planned_Qty_m",
-            "Good_Qty_m",
-            "Rejected_Qty_m",
-            "Production_Status"
-        ]
+        df = numeric_columns(
+            df,
+            [
+                "Planned_Qty_m",
+                "Good_Qty_m",
+                "Rejected_Qty_m"
+            ]
+        )
 
-        df = pd.DataFrame(data)
-
-        for col in columns:
-            if col not in df.columns:
-                df[col] = None
-
-        return df[columns]
+        return df
 
     except Exception as e:
 
-        st.error(f"Error loading Production: {e}")
+        st.error(
+            "Production table load error:"
+        )
+        st.code(str(e))
 
-        return pd.DataFrame(columns=[
-            "Production_ID",
-            "Item_ID",
-            "Production_Date",
-            "Batch_No",
-            "Production_Line",
-            "Planned_Qty_m",
-            "Good_Qty_m",
-            "Rejected_Qty_m",
-            "Production_Status"
-        ])
+        return pd.DataFrame(
+            columns=PRODUCTION_COLUMNS
+        )
 
+
+# ============================================================
+# LOAD STOCK
+# ============================================================
 
 @st.cache_data(ttl=5)
 def load_stock():
@@ -187,131 +246,58 @@ def load_stock():
             .execute()
         )
 
-        data = response.data or []
+        df = make_dataframe(
+            response.data,
+            STOCK_COLUMNS
+        )
 
-        columns = [
-            "Stock_ID",
-            "Item_ID",
-            "Production_ID",
-            "Batch_No",
-            "Stock_Date",
-            "Opening_Stock_m",
-            "Produced_Qty_m",
-            "Dispatched_Qty_m",
-            "Closing_Stock_m",
-            "Stock_Status"
-        ]
+        df = numeric_columns(
+            df,
+            [
+                "Opening_Stock_m",
+                "Produced_Qty_m",
+                "Dispatched_Qty_m",
+                "Closing_Stock_m"
+            ]
+        )
 
-        df = pd.DataFrame(data)
-
-        for col in columns:
-            if col not in df.columns:
-                df[col] = None
-
-        return df[columns]
+        return df
 
     except Exception as e:
 
-        st.error(f"Error loading Stock Control: {e}")
+        st.error(
+            "Stock Control table load error:"
+        )
+        st.code(str(e))
 
-        return pd.DataFrame(columns=[
-            "Stock_ID",
-            "Item_ID",
-            "Production_ID",
-            "Batch_No",
-            "Stock_Date",
-            "Opening_Stock_m",
-            "Produced_Qty_m",
-            "Dispatched_Qty_m",
-            "Closing_Stock_m",
-            "Stock_Status"
-        ])
+        return pd.DataFrame(
+            columns=STOCK_COLUMNS
+        )
 
 
-# =========================================================
-# LOAD DATA
-# =========================================================
+# ============================================================
+# CACHE REFRESH
+# ============================================================
+
+def refresh_data():
+
+    load_items.clear()
+    load_production.clear()
+    load_stock.clear()
+
+
+# ============================================================
+# LOAD LIVE DATA
+# ============================================================
 
 items = load_items()
 production = load_production()
 stock = load_stock()
 
 
-# =========================================================
-# DATA CLEANING
-# =========================================================
-
-def clean_numeric(df, columns):
-
-    for col in columns:
-
-        if col in df.columns:
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce"
-            ).fillna(0)
-
-    return df
-
-
-items = clean_numeric(
-    items,
-    [
-        "Nominal_Diameter_mm",
-        "Wall_Thickness_mm",
-        "Standard_Length"
-    ]
-)
-
-production = clean_numeric(
-    production,
-    [
-        "Planned_Qty_m",
-        "Good_Qty_m",
-        "Rejected_Qty_m"
-    ]
-)
-
-stock = clean_numeric(
-    stock,
-    [
-        "Opening_Stock_m",
-        "Produced_Qty_m",
-        "Dispatched_Qty_m",
-        "Closing_Stock_m"
-    ]
-)
-
-
-# =========================================================
-# HELPER FUNCTIONS
-# =========================================================
-
-def refresh_data():
-
-    st.cache_data.clear()
-
-
-def show_success(message):
-
-    st.success(message)
-    refresh_data()
-
-
-def safe_sum(df, column):
-
-    if df.empty or column not in df.columns:
-        return 0
-
-    return pd.to_numeric(
-        df[column],
-        errors="coerce"
-    ).fillna(0).sum()
-
-
-# =========================================================
+# ============================================================
 # SIDEBAR
-# =========================================================
+# ============================================================
 
 with st.sidebar:
 
@@ -350,13 +336,18 @@ with st.sidebar:
 
     st.markdown("---")
 
-    st.caption("Flex Head Industries Pvt Ltd")
-    st.caption("Pipe Manufacturing ERP")
+    st.caption(
+        "Flex Head Industries Pvt Ltd"
+    )
+
+    st.caption(
+        "Pipe Manufacturing ERP"
+    )
 
 
-# =========================================================
+# ============================================================
 # EXECUTIVE DASHBOARD
-# =========================================================
+# ============================================================
 
 if page == "Executive Dashboard":
 
@@ -371,50 +362,52 @@ if page == "Executive Dashboard":
         "Real-time overview of manufacturing, production and inventory."
     )
 
-    st.markdown('<div class="section-gap"></div>', unsafe_allow_html=True)
-
-    # -----------------------------------------------------
-    # CALCULATE METRICS
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # METRICS
+    # --------------------------------------------------------
 
     registered_items = len(items)
 
-    planned_production = safe_sum(
-        production,
-        "Planned_Qty_m"
+    planned_production = pd.to_numeric(
+        production["Planned_Qty_m"],
+        errors="coerce"
+    ).fillna(0).sum()
+
+    good_production = pd.to_numeric(
+        production["Good_Qty_m"],
+        errors="coerce"
+    ).fillna(0).sum()
+
+    rejected_production = pd.to_numeric(
+        production["Rejected_Qty_m"],
+        errors="coerce"
+    ).fillna(0).sum()
+
+    produced_to_stock = pd.to_numeric(
+        stock["Produced_Qty_m"],
+        errors="coerce"
+    ).fillna(0).sum()
+
+    dispatched = pd.to_numeric(
+        stock["Dispatched_Qty_m"],
+        errors="coerce"
+    ).fillna(0).sum()
+
+    current_stock = pd.to_numeric(
+        stock["Closing_Stock_m"],
+        errors="coerce"
+    ).fillna(0).sum()
+
+    total_production = (
+        good_production +
+        rejected_production
     )
 
-    good_production = safe_sum(
-        production,
-        "Good_Qty_m"
-    )
-
-    rejected_production = safe_sum(
-        production,
-        "Rejected_Qty_m"
-    )
-
-    produced_stock = safe_sum(
-        stock,
-        "Produced_Qty_m"
-    )
-
-    dispatched = safe_sum(
-        stock,
-        "Dispatched_Qty_m"
-    )
-
-    closing_stock = safe_sum(
-        stock,
-        "Closing_Stock_m"
-    )
-
-    total_produced = good_production + rejected_production
-
-    if total_produced > 0:
+    if total_production > 0:
 
         production_yield = (
-            good_production / total_produced
+            good_production /
+            total_production
         ) * 100
 
     else:
@@ -422,112 +415,121 @@ if page == "Executive Dashboard":
         production_yield = 0
 
 
-    # -----------------------------------------------------
-    # METRIC CARDS
-    # -----------------------------------------------------
+    # ========================================================
+    # FOUR MAIN CARDS
+    # ========================================================
 
-    c1, c2, c3, c4 = st.columns(4)
+    col1, col2, col3, col4 = st.columns(4)
 
-    with c1:
+
+    # --------------------------------------------------------
+    # REGISTERED ITEMS
+    # --------------------------------------------------------
+
+    with col1:
 
         st.markdown(
             f"""
-            <div class="metric-card">
+<div class="metric-card">
+    <div class="metric-icon">▣</div>
 
-                <div class="metric-icon">▣</div>
+    <div class="metric-label">
+        Registered Items
+    </div>
 
-                <div class="metric-label">
-                    Registered Items
-                </div>
+    <div class="metric-value">
+        {registered_items:,}
+    </div>
 
-                <div class="metric-value">
-                    {registered_items:,}
-                </div>
-
-                <div class="metric-caption">
-                    Total product items
-                </div>
-
-            </div>
-            """,
+    <div class="metric-caption">
+        Total product items
+    </div>
+</div>
+""",
             unsafe_allow_html=True
         )
 
 
-    with c2:
+    # --------------------------------------------------------
+    # GOOD PRODUCTION
+    # --------------------------------------------------------
+
+    with col2:
 
         st.markdown(
             f"""
-            <div class="metric-card">
+<div class="metric-card">
+    <div class="metric-icon">✓</div>
 
-                <div class="metric-icon">✓</div>
+    <div class="metric-label">
+        Good Production
+    </div>
 
-                <div class="metric-label">
-                    Good Production
-                </div>
+    <div class="metric-value">
+        {good_production:,.0f} m
+    </div>
 
-                <div class="metric-value">
-                    {good_production:,.0f} m
-                </div>
-
-                <div class="metric-caption">
-                    Accepted production
-                </div>
-
-            </div>
-            """,
+    <div class="metric-caption">
+        Accepted production
+    </div>
+</div>
+""",
             unsafe_allow_html=True
         )
 
 
-    with c3:
+    # --------------------------------------------------------
+    # CURRENT STOCK
+    # --------------------------------------------------------
+
+    with col3:
 
         st.markdown(
             f"""
-            <div class="metric-card">
+<div class="metric-card">
+    <div class="metric-icon">◈</div>
 
-                <div class="metric-icon">◈</div>
+    <div class="metric-label">
+        Current Stock
+    </div>
 
-                <div class="metric-label">
-                    Current Stock
-                </div>
+    <div class="metric-value">
+        {current_stock:,.0f} m
+    </div>
 
-                <div class="metric-value">
-                    {closing_stock:,.0f} m
-                </div>
-
-                <div class="metric-caption">
-                    Closing inventory
-                </div>
-
-            </div>
-            """,
+    <div class="metric-caption">
+        Closing inventory
+    </div>
+</div>
+""",
             unsafe_allow_html=True
         )
 
 
-    with c4:
+    # --------------------------------------------------------
+    # PRODUCTION YIELD
+    # --------------------------------------------------------
+
+    with col4:
 
         st.markdown(
             f"""
-            <div class="metric-card">
+<div class="metric-card">
+    <div class="metric-icon">%</div>
 
-                <div class="metric-icon">%</div>
+    <div class="metric-label">
+        Production Yield
+    </div>
 
-                <div class="metric-label">
-                    Production Yield
-                </div>
+    <div class="metric-value">
+        {production_yield:.1f}%
+    </div>
 
-                <div class="metric-value">
-                    {production_yield:.1f}%
-                </div>
-
-                <div class="metric-caption">
-                    Good vs total production
-                </div>
-
-            </div>
-            """,
+    <div class="metric-caption">
+        Good vs total production
+    </div>
+</div>
+""",
             unsafe_allow_html=True
         )
 
@@ -538,34 +540,34 @@ if page == "Executive Dashboard":
     )
 
 
-    # -----------------------------------------------------
-    # SECOND ROW
-    # -----------------------------------------------------
+    # ========================================================
+    # SECONDARY METRICS
+    # ========================================================
 
-    c5, c6, c7, c8 = st.columns(4)
+    c1, c2, c3, c4 = st.columns(4)
 
-    with c5:
+    with c1:
 
         st.metric(
             "Planned Production",
             f"{planned_production:,.0f} m"
         )
 
-    with c6:
+    with c2:
 
         st.metric(
             "Rejected Production",
             f"{rejected_production:,.0f} m"
         )
 
-    with c7:
+    with c3:
 
         st.metric(
             "Produced to Stock",
-            f"{produced_stock:,.0f} m"
+            f"{produced_to_stock:,.0f} m"
         )
 
-    with c8:
+    with c4:
 
         st.metric(
             "Dispatched",
@@ -576,24 +578,24 @@ if page == "Executive Dashboard":
     st.markdown("---")
 
 
-    # =====================================================
+    # ========================================================
     # CHARTS
-    # =====================================================
+    # ========================================================
 
-    col1, col2 = st.columns(2)
+    chart1, chart2 = st.columns(2)
 
 
-    # -----------------------------------------------------
+    # --------------------------------------------------------
     # PRODUCTION STATUS
-    # -----------------------------------------------------
+    # --------------------------------------------------------
 
-    with col1:
+    with chart1:
 
         st.subheader("Production Status")
 
         if not production.empty:
 
-            status_data = (
+            status_df = (
                 production[
                     "Production_Status"
                 ]
@@ -603,26 +605,26 @@ if page == "Executive Dashboard":
                 .reset_index()
             )
 
-            status_data.columns = [
+            status_df.columns = [
                 "Status",
                 "Count"
             ]
 
             fig = px.pie(
-                status_data,
+                status_df,
                 names="Status",
                 values="Count",
                 hole=0.45
             )
 
             fig.update_layout(
+                height=360,
                 margin=dict(
                     l=10,
                     r=10,
-                    t=20,
+                    t=30,
                     b=10
-                ),
-                height=350
+                )
             )
 
             st.plotly_chart(
@@ -632,14 +634,16 @@ if page == "Executive Dashboard":
 
         else:
 
-            st.info("No production data available.")
+            st.info(
+                "No production records found."
+            )
 
 
-    # -----------------------------------------------------
-    # PRODUCTION COMPARISON
-    # -----------------------------------------------------
+    # --------------------------------------------------------
+    # PRODUCTION QUANTITY
+    # --------------------------------------------------------
 
-    with col2:
+    with chart2:
 
         st.subheader("Production Overview")
 
@@ -666,11 +670,11 @@ if page == "Executive Dashboard":
         )
 
         fig.update_layout(
-            height=350,
+            height=360,
             margin=dict(
                 l=10,
                 r=10,
-                t=20,
+                t=30,
                 b=10
             )
         )
@@ -681,49 +685,53 @@ if page == "Executive Dashboard":
         )
 
 
-    # =====================================================
-    # STOCK BY ITEM
-    # =====================================================
+    # ========================================================
+    # STOCK CHART
+    # ========================================================
 
     st.subheader("Current Stock by Item")
 
     if not stock.empty:
 
-        stock_item = (
+        stock_chart = (
             stock
-            .groupby("Item_ID", as_index=False)
-            ["Closing_Stock_m"]
+            .groupby(
+                "Item_ID",
+                as_index=False
+            )["Closing_Stock_m"]
             .sum()
         )
 
         if not items.empty:
 
-            item_names = items[
+            item_lookup = items[
                 [
                     "Item_ID",
                     "Item_Code"
                 ]
             ].copy()
 
-            stock_item = stock_item.merge(
-                item_names,
+            stock_chart = stock_chart.merge(
+                item_lookup,
                 on="Item_ID",
                 how="left"
             )
 
-            stock_item["Display_Item"] = (
-                stock_item["Item_Code"]
-                .fillna(stock_item["Item_ID"])
+            stock_chart["Display_Item"] = (
+                stock_chart["Item_Code"]
+                .fillna(
+                    stock_chart["Item_ID"]
+                )
             )
 
         else:
 
-            stock_item["Display_Item"] = (
-                stock_item["Item_ID"]
+            stock_chart["Display_Item"] = (
+                stock_chart["Item_ID"]
             )
 
         fig = px.bar(
-            stock_item,
+            stock_chart,
             x="Display_Item",
             y="Closing_Stock_m",
             text_auto=True,
@@ -745,12 +753,14 @@ if page == "Executive Dashboard":
 
     else:
 
-        st.info("No stock data available.")
+        st.info(
+            "No stock records found."
+        )
 
 
-# =========================================================
+# ============================================================
 # ITEM REGISTRATION
-# =========================================================
+# ============================================================
 
 elif page == "Item Registration":
 
@@ -762,11 +772,11 @@ elif page == "Item Registration":
     st.title("Item Registration")
 
     st.caption(
-        "Create, search, update and delete manufacturing items."
+        "Manage manufacturing product items."
     )
 
 
-    tab1, tab2, tab3 = st.tabs(
+    tab_add, tab_update, tab_delete = st.tabs(
         [
             "Add Item",
             "Update Item",
@@ -775,19 +785,19 @@ elif page == "Item Registration":
     )
 
 
-    # =====================================================
+    # ========================================================
     # ADD ITEM
-    # =====================================================
+    # ========================================================
 
-    with tab1:
+    with tab_add:
 
         st.subheader("Register New Item")
 
-        with st.form("add_item_form"):
+        with st.form("add_item"):
 
-            col1, col2, col3 = st.columns(3)
+            a, b, c = st.columns(3)
 
-            with col1:
+            with a:
 
                 item_id = st.text_input(
                     "Item ID *"
@@ -805,7 +815,7 @@ elif page == "Item Registration":
                     ]
                 )
 
-            with col2:
+            with b:
 
                 application = st.selectbox(
                     "Application",
@@ -828,13 +838,13 @@ elif page == "Item Registration":
                     step=0.1
                 )
 
-            with col3:
+            with c:
 
                 sdr = st.text_input(
                     "SDR"
                 )
 
-                color = st.text_input(
+                item_color = st.text_input(
                     "Color"
                 )
 
@@ -850,17 +860,19 @@ elif page == "Item Registration":
                 )
 
 
-            submitted = st.form_submit_button(
+            add_item = st.form_submit_button(
                 "Add Item",
                 type="primary"
             )
 
 
-        if submitted:
+        if add_item:
 
             if not item_id.strip():
 
-                st.error("Item ID is required.")
+                st.error(
+                    "Item ID is required."
+                )
 
             else:
 
@@ -872,87 +884,100 @@ elif page == "Item Registration":
                     "Nominal_Diameter_mm": diameter,
                     "Wall_Thickness_mm": wall,
                     "SDR": sdr.strip(),
-                    "Color": color.strip(),
+                    "Color": item_color.strip(),
                     "Standard_Length": standard_length,
                     "Unit": unit.strip()
                 }
 
                 try:
 
-                    supabase.table(
-                        ITEM_TABLE
-                    ).insert(payload).execute()
+                    (
+                        supabase
+                        .table(ITEM_TABLE)
+                        .insert(payload)
+                        .execute()
+                    )
+
+                    refresh_data()
 
                     st.success(
                         "Item added successfully."
                     )
-
-                    refresh_data()
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not add item: {e}"
+                        "Item could not be added."
                     )
 
+                    st.code(str(e))
 
-    # =====================================================
+
+    # ========================================================
     # UPDATE ITEM
-    # =====================================================
+    # ========================================================
 
-    with tab2:
+    with tab_update:
 
-        st.subheader("Update Existing Item")
+        st.subheader("Update Item")
 
         if items.empty:
 
-            st.info("No items available.")
+            st.info(
+                "No items available."
+            )
 
         else:
 
-            selected_item = st.selectbox(
+            selected_id = st.selectbox(
                 "Select Item",
-                items["Item_ID"].astype(str).tolist(),
-                key="update_item_select"
+                items["Item_ID"]
+                .astype(str)
+                .tolist(),
+                key="update_item_id"
             )
 
             current = items[
                 items["Item_ID"].astype(str)
-                == selected_item
+                == selected_id
             ].iloc[0]
 
 
-            with st.form("update_item_form"):
+            with st.form("update_item"):
 
-                col1, col2, col3 = st.columns(3)
+                a, b, c = st.columns(3)
 
-                with col1:
+                with a:
 
-                    new_code = st.text_input(
+                    update_code = st.text_input(
                         "Item Code",
                         value=str(
                             current["Item_Code"]
-                            if pd.notna(current["Item_Code"])
+                            if pd.notna(
+                                current["Item_Code"]
+                            )
                             else ""
                         )
                     )
 
-                    new_grade = st.selectbox(
+                    update_grade = st.selectbox(
                         "Material Grade",
                         [
                             "PE-80",
                             "PE-100"
                         ],
                         index=(
-                            0
-                            if str(current["Material_Grade"]) == "PE-80"
-                            else 1
+                            1
+                            if str(
+                                current["Material_Grade"]
+                            ) == "PE-100"
+                            else 0
                         )
                     )
 
-                    new_application = st.selectbox(
+                    update_application = st.selectbox(
                         "Application",
                         [
                             "Water",
@@ -965,10 +990,13 @@ elif page == "Item Registration":
                                 "Sewerage",
                                 "Gas"
                             ].index(
-                                str(current["Application"])
+                                str(
+                                    current["Application"]
+                                )
                             )
-                            if str(current["Application"])
-                            in [
+                            if str(
+                                current["Application"]
+                            ) in [
                                 "Water",
                                 "Sewerage",
                                 "Gas"
@@ -977,86 +1005,95 @@ elif page == "Item Registration":
                         )
                     )
 
-                with col2:
+                with b:
 
-                    new_diameter = st.number_input(
+                    update_diameter = st.number_input(
                         "Nominal Diameter (mm)",
                         min_value=0.0,
                         value=float(
-                            current["Nominal_Diameter_mm"]
-                            or 0
+                            current[
+                                "Nominal_Diameter_mm"
+                            ] or 0
                         ),
                         step=1.0
                     )
 
-                    new_wall = st.number_input(
+                    update_wall = st.number_input(
                         "Wall Thickness (mm)",
                         min_value=0.0,
                         value=float(
-                            current["Wall_Thickness_mm"]
-                            or 0
+                            current[
+                                "Wall_Thickness_mm"
+                            ] or 0
                         ),
                         step=0.1
                     )
 
-                    new_sdr = st.text_input(
+                    update_sdr = st.text_input(
                         "SDR",
                         value=str(
                             current["SDR"]
-                            if pd.notna(current["SDR"])
+                            if pd.notna(
+                                current["SDR"]
+                            )
                             else ""
                         )
                     )
 
-                with col3:
+                with c:
 
-                    new_color = st.text_input(
+                    update_color = st.text_input(
                         "Color",
                         value=str(
                             current["Color"]
-                            if pd.notna(current["Color"])
+                            if pd.notna(
+                                current["Color"]
+                            )
                             else ""
                         )
                     )
 
-                    new_length = st.number_input(
+                    update_length = st.number_input(
                         "Standard Length",
                         min_value=0.0,
                         value=float(
-                            current["Standard_Length"]
-                            or 0
+                            current[
+                                "Standard_Length"
+                            ] or 0
                         ),
                         step=1.0
                     )
 
-                    new_unit = st.text_input(
+                    update_unit = st.text_input(
                         "Unit",
                         value=str(
                             current["Unit"]
-                            if pd.notna(current["Unit"])
+                            if pd.notna(
+                                current["Unit"]
+                            )
                             else "m"
                         )
                     )
 
 
-                update_btn = st.form_submit_button(
+                update_item = st.form_submit_button(
                     "Update Item",
                     type="primary"
                 )
 
 
-            if update_btn:
+            if update_item:
 
                 payload = {
-                    "Item_Code": new_code.strip(),
-                    "Material_Grade": new_grade,
-                    "Application": new_application,
-                    "Nominal_Diameter_mm": new_diameter,
-                    "Wall_Thickness_mm": new_wall,
-                    "SDR": new_sdr.strip(),
-                    "Color": new_color.strip(),
-                    "Standard_Length": new_length,
-                    "Unit": new_unit.strip()
+                    "Item_Code": update_code.strip(),
+                    "Material_Grade": update_grade,
+                    "Application": update_application,
+                    "Nominal_Diameter_mm": update_diameter,
+                    "Wall_Thickness_mm": update_wall,
+                    "SDR": update_sdr.strip(),
+                    "Color": update_color.strip(),
+                    "Standard_Length": update_length,
+                    "Unit": update_unit.strip()
                 }
 
                 try:
@@ -1065,47 +1102,52 @@ elif page == "Item Registration":
                         supabase
                         .table(ITEM_TABLE)
                         .update(payload)
-                        .eq("Item_ID", selected_item)
+                        .eq(
+                            "Item_ID",
+                            selected_id
+                        )
                         .execute()
                     )
+
+                    refresh_data()
 
                     st.success(
                         "Item updated successfully."
                     )
-
-                    refresh_data()
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not update item: {e}"
+                        "Item could not be updated."
                     )
 
+                    st.code(str(e))
 
-    # =====================================================
+
+    # ========================================================
     # DELETE ITEM
-    # =====================================================
+    # ========================================================
 
-    with tab3:
+    with tab_delete:
 
         st.subheader("Delete Item")
 
         if items.empty:
 
-            st.info("No items available.")
+            st.info(
+                "No items available."
+            )
 
         else:
 
-            delete_item = st.selectbox(
-                "Select Item to Delete",
-                items["Item_ID"].astype(str).tolist(),
-                key="delete_item_select"
-            )
-
-            st.warning(
-                "Deleting an item is permanent."
+            delete_id = st.selectbox(
+                "Select Item",
+                items["Item_ID"]
+                .astype(str)
+                .tolist(),
+                key="delete_item_id"
             )
 
             if st.button(
@@ -1121,44 +1163,52 @@ elif page == "Item Registration":
                         .delete()
                         .eq(
                             "Item_ID",
-                            delete_item
+                            delete_id
                         )
                         .execute()
                     )
 
+                    refresh_data()
+
                     st.success(
                         "Item deleted successfully."
                     )
-
-                    refresh_data()
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not delete item: {e}"
+                        "Item could not be deleted."
                     )
 
+                    st.code(str(e))
+
+
+    # ========================================================
+    # ITEM TABLE
+    # ========================================================
 
     st.markdown("---")
 
     st.subheader("Registered Items")
 
-    search_item = st.text_input(
-        "Search Item",
-        placeholder="Search by Item ID, Item Code or Application..."
+    search = st.text_input(
+        "Search",
+        placeholder="Search Item ID, Item Code, Grade..."
     )
 
     display_items = items.copy()
 
-    if search_item:
+    if search:
 
         mask = (
-            display_items.astype(str)
+            display_items
+            .astype(str)
             .apply(
-                lambda col: col.str.contains(
-                    search_item,
+                lambda x:
+                x.str.contains(
+                    search,
                     case=False,
                     na=False
                 )
@@ -1175,9 +1225,9 @@ elif page == "Item Registration":
     )
 
 
-# =========================================================
+# ============================================================
 # PRODUCTION
-# =========================================================
+# ============================================================
 
 elif page == "Production":
 
@@ -1189,11 +1239,11 @@ elif page == "Production":
     st.title("Production Management")
 
     st.caption(
-        "Manage production records, quantities and production status."
+        "Manage production records and quantities."
     )
 
 
-    tab1, tab2, tab3 = st.tabs(
+    tab_add, tab_update, tab_delete = st.tabs(
         [
             "Add Production",
             "Update Production",
@@ -1202,19 +1252,19 @@ elif page == "Production":
     )
 
 
-    # =====================================================
+    # ========================================================
     # ADD PRODUCTION
-    # =====================================================
+    # ========================================================
 
-    with tab1:
+    with tab_add:
 
-        st.subheader("Add Production Record")
+        st.subheader("Add Production")
 
-        with st.form("add_production_form"):
+        with st.form("add_production"):
 
-            col1, col2, col3 = st.columns(3)
+            a, b, c = st.columns(3)
 
-            with col1:
+            with a:
 
                 production_id = st.text_input(
                     "Production ID *"
@@ -1224,7 +1274,9 @@ elif page == "Production":
 
                     production_item = st.selectbox(
                         "Item ID",
-                        items["Item_ID"].astype(str).tolist()
+                        items["Item_ID"]
+                        .astype(str)
+                        .tolist()
                     )
 
                 else:
@@ -1237,7 +1289,7 @@ elif page == "Production":
                     "Production Date"
                 )
 
-            with col2:
+            with b:
 
                 batch_no = st.text_input(
                     "Batch No"
@@ -1253,7 +1305,7 @@ elif page == "Production":
                     step=1
                 )
 
-            with col3:
+            with c:
 
                 good_qty = st.number_input(
                     "Good Quantity (m)",
@@ -1278,13 +1330,13 @@ elif page == "Production":
                 )
 
 
-            submit_production = st.form_submit_button(
+            add_production = st.form_submit_button(
                 "Add Production",
                 type="primary"
             )
 
 
-        if submit_production:
+        if add_production:
 
             if not production_id.strip():
 
@@ -1296,14 +1348,21 @@ elif page == "Production":
 
                 payload = {
                     "Production_ID": production_id.strip(),
-                    "Item_ID": str(production_item),
-                    "Production_Date": str(production_date),
+                    "Item_ID": str(
+                        production_item
+                    ),
+                    "Production_Date": str(
+                        production_date
+                    ),
                     "Batch_No": batch_no.strip(),
-                    "Production_Line": production_line.strip(),
+                    "Production_Line":
+                        production_line.strip(),
                     "Planned_Qty_m": planned_qty,
                     "Good_Qty_m": good_qty,
-                    "Rejected_Qty_m": rejected_qty,
-                    "Production_Status": production_status
+                    "Rejected_Qty_m":
+                        rejected_qty,
+                    "Production_Status":
+                        production_status
                 }
 
                 try:
@@ -1315,53 +1374,62 @@ elif page == "Production":
                         .execute()
                     )
 
-                    st.success(
-                        "Production record added successfully."
-                    )
-
                     refresh_data()
+
+                    st.success(
+                        "Production added successfully."
+                    )
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not add production: {e}"
+                        "Production could not be added."
                     )
 
+                    st.code(str(e))
 
-    # =====================================================
+
+    # ========================================================
     # UPDATE PRODUCTION
-    # =====================================================
+    # ========================================================
 
-    with tab2:
+    with tab_update:
 
         st.subheader("Update Production")
 
         if production.empty:
 
-            st.info("No production records available.")
+            st.info(
+                "No production records available."
+            )
 
         else:
 
             selected_production = st.selectbox(
-                "Select Production ID",
+                "Production ID",
                 production[
                     "Production_ID"
-                ].astype(str).tolist()
+                ]
+                .astype(str)
+                .tolist(),
+                key="update_production_id"
             )
 
             current = production[
-                production["Production_ID"].astype(str)
+                production[
+                    "Production_ID"
+                ].astype(str)
                 == selected_production
             ].iloc[0]
 
 
-            with st.form("update_production_form"):
+            with st.form("update_production"):
 
-                col1, col2, col3 = st.columns(3)
+                a, b, c = st.columns(3)
 
-                with col1:
+                with a:
 
                     update_item = st.text_input(
                         "Item ID",
@@ -1373,7 +1441,9 @@ elif page == "Production":
                     update_date = st.text_input(
                         "Production Date",
                         value=str(
-                            current["Production_Date"]
+                            current[
+                                "Production_Date"
+                            ]
                         )
                     )
 
@@ -1381,18 +1451,26 @@ elif page == "Production":
                         "Batch No",
                         value=str(
                             current["Batch_No"]
-                            if pd.notna(current["Batch_No"])
+                            if pd.notna(
+                                current["Batch_No"]
+                            )
                             else ""
                         )
                     )
 
-                with col2:
+                with b:
 
                     update_line = st.text_input(
                         "Production Line",
                         value=str(
-                            current["Production_Line"]
-                            if pd.notna(current["Production_Line"])
+                            current[
+                                "Production_Line"
+                            ]
+                            if pd.notna(
+                                current[
+                                    "Production_Line"
+                                ]
+                            )
                             else ""
                         )
                     )
@@ -1401,8 +1479,9 @@ elif page == "Production":
                         "Planned Quantity (m)",
                         min_value=0,
                         value=int(
-                            current["Planned_Qty_m"]
-                            or 0
+                            current[
+                                "Planned_Qty_m"
+                            ] or 0
                         )
                     )
 
@@ -1410,23 +1489,25 @@ elif page == "Production":
                         "Good Quantity (m)",
                         min_value=0,
                         value=int(
-                            current["Good_Qty_m"]
-                            or 0
+                            current[
+                                "Good_Qty_m"
+                            ] or 0
                         )
                     )
 
-                with col3:
+                with c:
 
                     update_rejected = st.number_input(
                         "Rejected Quantity (m)",
                         min_value=0,
                         value=int(
-                            current["Rejected_Qty_m"]
-                            or 0
+                            current[
+                                "Rejected_Qty_m"
+                            ] or 0
                         )
                     )
 
-                    status_options = [
+                    statuses = [
                         "Planned",
                         "In Progress",
                         "Completed",
@@ -1434,42 +1515,51 @@ elif page == "Production":
                     ]
 
                     current_status = str(
-                        current["Production_Status"]
+                        current[
+                            "Production_Status"
+                        ]
                     )
 
                     status_index = (
-                        status_options.index(
+                        statuses.index(
                             current_status
                         )
-                        if current_status
-                        in status_options
+                        if current_status in statuses
                         else 0
                     )
 
                     update_status = st.selectbox(
                         "Production Status",
-                        status_options,
+                        statuses,
                         index=status_index
                     )
 
 
-                update_production_btn = st.form_submit_button(
+                update_production = st.form_submit_button(
                     "Update Production",
                     type="primary"
                 )
 
 
-            if update_production_btn:
+            if update_production:
 
                 payload = {
-                    "Item_ID": update_item.strip(),
-                    "Production_Date": update_date.strip(),
-                    "Batch_No": update_batch.strip(),
-                    "Production_Line": update_line.strip(),
-                    "Planned_Qty_m": update_planned,
-                    "Good_Qty_m": update_good,
-                    "Rejected_Qty_m": update_rejected,
-                    "Production_Status": update_status
+                    "Item_ID":
+                        update_item.strip(),
+                    "Production_Date":
+                        update_date.strip(),
+                    "Batch_No":
+                        update_batch.strip(),
+                    "Production_Line":
+                        update_line.strip(),
+                    "Planned_Qty_m":
+                        update_planned,
+                    "Good_Qty_m":
+                        update_good,
+                    "Rejected_Qty_m":
+                        update_rejected,
+                    "Production_Status":
+                        update_status
                 }
 
                 try:
@@ -1485,45 +1575,47 @@ elif page == "Production":
                         .execute()
                     )
 
+                    refresh_data()
+
                     st.success(
                         "Production updated successfully."
                     )
-
-                    refresh_data()
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not update production: {e}"
+                        "Production could not be updated."
                     )
 
+                    st.code(str(e))
 
-    # =====================================================
+
+    # ========================================================
     # DELETE PRODUCTION
-    # =====================================================
+    # ========================================================
 
-    with tab3:
+    with tab_delete:
 
         st.subheader("Delete Production")
 
         if production.empty:
 
-            st.info("No production records available.")
+            st.info(
+                "No production records available."
+            )
 
         else:
 
             delete_production = st.selectbox(
-                "Select Production ID",
+                "Production ID",
                 production[
                     "Production_ID"
-                ].astype(str).tolist(),
-                key="delete_production"
-            )
-
-            st.warning(
-                "Deleting this production record is permanent."
+                ]
+                .astype(str)
+                .tolist(),
+                key="delete_production_id"
             )
 
             if st.button(
@@ -1544,19 +1636,21 @@ elif page == "Production":
                         .execute()
                     )
 
+                    refresh_data()
+
                     st.success(
                         "Production deleted successfully."
                     )
-
-                    refresh_data()
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not delete production: {e}"
+                        "Production could not be deleted."
                     )
+
+                    st.code(str(e))
 
 
     st.markdown("---")
@@ -1570,9 +1664,9 @@ elif page == "Production":
     )
 
 
-# =========================================================
+# ============================================================
 # STOCK CONTROL
-# =========================================================
+# ============================================================
 
 elif page == "Stock Control":
 
@@ -1588,7 +1682,7 @@ elif page == "Stock Control":
     )
 
 
-    tab1, tab2, tab3 = st.tabs(
+    tab_add, tab_update, tab_delete = st.tabs(
         [
             "Add Stock",
             "Update Stock",
@@ -1597,19 +1691,19 @@ elif page == "Stock Control":
     )
 
 
-    # =====================================================
+    # ========================================================
     # ADD STOCK
-    # =====================================================
+    # ========================================================
 
-    with tab1:
+    with tab_add:
 
-        st.subheader("Add Stock Record")
+        st.subheader("Add Stock")
 
-        with st.form("add_stock_form"):
+        with st.form("add_stock"):
 
-            col1, col2, col3 = st.columns(3)
+            a, b, c = st.columns(3)
 
-            with col1:
+            with a:
 
                 stock_id = st.text_input(
                     "Stock ID *"
@@ -1619,8 +1713,10 @@ elif page == "Stock Control":
 
                     stock_item = st.selectbox(
                         "Item ID",
-                        items["Item_ID"].astype(str).tolist(),
-                        key="stock_item"
+                        items["Item_ID"]
+                        .astype(str)
+                        .tolist(),
+                        key="add_stock_item"
                     )
 
                 else:
@@ -1635,7 +1731,9 @@ elif page == "Stock Control":
                         "Production ID",
                         production[
                             "Production_ID"
-                        ].astype(str).tolist()
+                        ]
+                        .astype(str)
+                        .tolist()
                     )
 
                 else:
@@ -1644,11 +1742,11 @@ elif page == "Stock Control":
                         "Production ID"
                     )
 
-                batch_stock = st.text_input(
+                stock_batch = st.text_input(
                     "Batch No"
                 )
 
-            with col2:
+            with b:
 
                 stock_date = st.date_input(
                     "Stock Date"
@@ -1660,13 +1758,13 @@ elif page == "Stock Control":
                     step=1
                 )
 
-                produced_stock_qty = st.number_input(
+                produced_stock = st.number_input(
                     "Produced Quantity (m)",
                     min_value=0,
                     step=1
                 )
 
-            with col3:
+            with c:
 
                 dispatched_stock = st.number_input(
                     "Dispatched Quantity (m)",
@@ -1674,7 +1772,7 @@ elif page == "Stock Control":
                     step=1
                 )
 
-                closing_stock_input = st.number_input(
+                closing_stock = st.number_input(
                     "Closing Stock (m)",
                     min_value=0,
                     step=1
@@ -1690,13 +1788,13 @@ elif page == "Stock Control":
                 )
 
 
-            submit_stock = st.form_submit_button(
+            add_stock = st.form_submit_button(
                 "Add Stock",
                 type="primary"
             )
 
 
-        if submit_stock:
+        if add_stock:
 
             if not stock_id.strip():
 
@@ -1707,16 +1805,26 @@ elif page == "Stock Control":
             else:
 
                 payload = {
-                    "Stock_ID": stock_id.strip(),
-                    "Item_ID": str(stock_item),
-                    "Production_ID": str(stock_production),
-                    "Batch_No": batch_stock.strip(),
-                    "Stock_Date": str(stock_date),
-                    "Opening_Stock_m": opening_stock,
-                    "Produced_Qty_m": produced_stock_qty,
-                    "Dispatched_Qty_m": dispatched_stock,
-                    "Closing_Stock_m": closing_stock_input,
-                    "Stock_Status": stock_status
+                    "Stock_ID":
+                        stock_id.strip(),
+                    "Item_ID":
+                        str(stock_item),
+                    "Production_ID":
+                        str(stock_production),
+                    "Batch_No":
+                        stock_batch.strip(),
+                    "Stock_Date":
+                        str(stock_date),
+                    "Opening_Stock_m":
+                        opening_stock,
+                    "Produced_Qty_m":
+                        produced_stock,
+                    "Dispatched_Qty_m":
+                        dispatched_stock,
+                    "Closing_Stock_m":
+                        closing_stock,
+                    "Stock_Status":
+                        stock_status
                 }
 
                 try:
@@ -1728,80 +1836,91 @@ elif page == "Stock Control":
                         .execute()
                     )
 
-                    st.success(
-                        "Stock record added successfully."
-                    )
-
                     refresh_data()
+
+                    st.success(
+                        "Stock added successfully."
+                    )
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not add stock: {e}"
+                        "Stock could not be added."
                     )
 
+                    st.code(str(e))
 
-    # =====================================================
+
+    # ========================================================
     # UPDATE STOCK
-    # =====================================================
+    # ========================================================
 
-    with tab2:
+    with tab_update:
 
         st.subheader("Update Stock")
 
         if stock.empty:
 
-            st.info("No stock records available.")
+            st.info(
+                "No stock records available."
+            )
 
         else:
 
             selected_stock = st.selectbox(
-                "Select Stock ID",
+                "Stock ID",
                 stock[
                     "Stock_ID"
-                ].astype(str).tolist()
+                ]
+                .astype(str)
+                .tolist(),
+                key="update_stock_id"
             )
 
             current = stock[
-                stock["Stock_ID"].astype(str)
+                stock[
+                    "Stock_ID"
+                ].astype(str)
                 == selected_stock
             ].iloc[0]
 
 
-            with st.form("update_stock_form"):
+            with st.form("update_stock"):
 
-                col1, col2, col3 = st.columns(3)
+                a, b, c = st.columns(3)
 
-                with col1:
+                with a:
 
-                    update_stock_item = st.text_input(
+                    update_item = st.text_input(
                         "Item ID",
                         value=str(
                             current["Item_ID"]
                         )
                     )
 
-                    update_stock_production = st.text_input(
+                    update_production = st.text_input(
                         "Production ID",
                         value=str(
                             current["Production_ID"]
                         )
                     )
 
-                    update_stock_batch = st.text_input(
+                    update_batch = st.text_input(
                         "Batch No",
                         value=str(
                             current["Batch_No"]
-                            if pd.notna(current["Batch_No"])
+                            if pd.notna(
+                                current["Batch_No"]
+                            )
                             else ""
                         )
                     )
 
-                with col2:
+                with b:
 
-                    update_stock_date = st.text_input(
+                    update_date = st.text_input(
                         "Stock Date",
                         value=str(
                             current["Stock_Date"]
@@ -1812,8 +1931,9 @@ elif page == "Stock Control":
                         "Opening Stock (m)",
                         min_value=0,
                         value=int(
-                            current["Opening_Stock_m"]
-                            or 0
+                            current[
+                                "Opening_Stock_m"
+                            ] or 0
                         )
                     )
 
@@ -1821,19 +1941,21 @@ elif page == "Stock Control":
                         "Produced Quantity (m)",
                         min_value=0,
                         value=int(
-                            current["Produced_Qty_m"]
-                            or 0
+                            current[
+                                "Produced_Qty_m"
+                            ] or 0
                         )
                     )
 
-                with col3:
+                with c:
 
                     update_dispatched = st.number_input(
                         "Dispatched Quantity (m)",
                         min_value=0,
                         value=int(
-                            current["Dispatched_Qty_m"]
-                            or 0
+                            current[
+                                "Dispatched_Qty_m"
+                            ] or 0
                         )
                     )
 
@@ -1841,55 +1963,67 @@ elif page == "Stock Control":
                         "Closing Stock (m)",
                         min_value=0,
                         value=int(
-                            current["Closing_Stock_m"]
-                            or 0
+                            current[
+                                "Closing_Stock_m"
+                            ] or 0
                         )
                     )
 
-                    stock_status_options = [
+                    stock_statuses = [
                         "Available",
                         "Low Stock",
                         "Out of Stock"
                     ]
 
                     current_stock_status = str(
-                        current["Stock_Status"]
+                        current[
+                            "Stock_Status"
+                        ]
                     )
 
-                    status_index = (
-                        stock_status_options.index(
+                    stock_status_index = (
+                        stock_statuses.index(
                             current_stock_status
                         )
                         if current_stock_status
-                        in stock_status_options
+                        in stock_statuses
                         else 0
                     )
 
-                    update_stock_status = st.selectbox(
+                    update_status = st.selectbox(
                         "Stock Status",
-                        stock_status_options,
-                        index=status_index
+                        stock_statuses,
+                        index=stock_status_index
                     )
 
 
-                update_stock_btn = st.form_submit_button(
+                update_stock = st.form_submit_button(
                     "Update Stock",
                     type="primary"
                 )
 
 
-            if update_stock_btn:
+            if update_stock:
 
                 payload = {
-                    "Item_ID": update_stock_item.strip(),
-                    "Production_ID": update_stock_production.strip(),
-                    "Batch_No": update_stock_batch.strip(),
-                    "Stock_Date": update_stock_date.strip(),
-                    "Opening_Stock_m": update_opening,
-                    "Produced_Qty_m": update_produced,
-                    "Dispatched_Qty_m": update_dispatched,
-                    "Closing_Stock_m": update_closing,
-                    "Stock_Status": update_stock_status
+                    "Item_ID":
+                        update_item.strip(),
+                    "Production_ID":
+                        update_production.strip(),
+                    "Batch_No":
+                        update_batch.strip(),
+                    "Stock_Date":
+                        update_date.strip(),
+                    "Opening_Stock_m":
+                        update_opening,
+                    "Produced_Qty_m":
+                        update_produced,
+                    "Dispatched_Qty_m":
+                        update_dispatched,
+                    "Closing_Stock_m":
+                        update_closing,
+                    "Stock_Status":
+                        update_status
                 }
 
                 try:
@@ -1905,45 +2039,47 @@ elif page == "Stock Control":
                         .execute()
                     )
 
+                    refresh_data()
+
                     st.success(
                         "Stock updated successfully."
                     )
-
-                    refresh_data()
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not update stock: {e}"
+                        "Stock could not be updated."
                     )
 
+                    st.code(str(e))
 
-    # =====================================================
+
+    # ========================================================
     # DELETE STOCK
-    # =====================================================
+    # ========================================================
 
-    with tab3:
+    with tab_delete:
 
         st.subheader("Delete Stock")
 
         if stock.empty:
 
-            st.info("No stock records available.")
+            st.info(
+                "No stock records available."
+            )
 
         else:
 
             delete_stock = st.selectbox(
-                "Select Stock ID",
+                "Stock ID",
                 stock[
                     "Stock_ID"
-                ].astype(str).tolist(),
-                key="delete_stock"
-            )
-
-            st.warning(
-                "Deleting this stock record is permanent."
+                ]
+                .astype(str)
+                .tolist(),
+                key="delete_stock_id"
             )
 
             if st.button(
@@ -1964,19 +2100,21 @@ elif page == "Stock Control":
                         .execute()
                     )
 
+                    refresh_data()
+
                     st.success(
                         "Stock deleted successfully."
                     )
-
-                    refresh_data()
 
                     st.rerun()
 
                 except Exception as e:
 
                     st.error(
-                        f"Could not delete stock: {e}"
+                        "Stock could not be deleted."
                     )
+
+                    st.code(str(e))
 
 
     st.markdown("---")
@@ -1990,9 +2128,9 @@ elif page == "Stock Control":
     )
 
 
-# =========================================================
+# ============================================================
 # ANALYTICS
-# =========================================================
+# ============================================================
 
 elif page == "Analytics":
 
@@ -2004,20 +2142,20 @@ elif page == "Analytics":
     st.title("Analytics")
 
     st.caption(
-        "Production, rejection and inventory analysis."
+        "Production and inventory analysis."
     )
 
 
-    # =====================================================
+    # ========================================================
     # PRODUCTION ANALYSIS
-    # =====================================================
+    # ========================================================
 
     st.subheader("Production Analysis")
 
     if production.empty:
 
         st.info(
-            "No production data available for analysis."
+            "No production data available."
         )
 
     else:
@@ -2026,36 +2164,37 @@ elif page == "Analytics":
 
         analysis["Total_Production"] = (
             analysis["Good_Qty_m"]
-            + analysis["Rejected_Qty_m"]
+            +
+            analysis["Rejected_Qty_m"]
         )
 
         analysis["Yield_%"] = 0.0
 
-        mask = (
+        valid = (
             analysis["Total_Production"] > 0
         )
 
         analysis.loc[
-            mask,
+            valid,
             "Yield_%"
         ] = (
             analysis.loc[
-                mask,
+                valid,
                 "Good_Qty_m"
             ]
             /
             analysis.loc[
-                mask,
+                valid,
                 "Total_Production"
             ]
             * 100
         )
 
 
-        col1, col2 = st.columns(2)
+        a, b = st.columns(2)
 
 
-        with col1:
+        with a:
 
             fig = px.bar(
                 analysis,
@@ -2078,7 +2217,7 @@ elif page == "Analytics":
             )
 
 
-        with col2:
+        with b:
 
             fig = px.bar(
                 analysis,
@@ -2097,8 +2236,6 @@ elif page == "Analytics":
             )
 
 
-        st.subheader("Production Analysis Table")
-
         st.dataframe(
             analysis,
             use_container_width=True,
@@ -2106,16 +2243,16 @@ elif page == "Analytics":
         )
 
 
-    # =====================================================
+    # ========================================================
     # STOCK ANALYSIS
-    # =====================================================
+    # ========================================================
 
     st.subheader("Inventory Analysis")
 
     if stock.empty:
 
         st.info(
-            "No stock data available for analysis."
+            "No stock data available."
         )
 
     else:
@@ -2125,8 +2262,7 @@ elif page == "Analytics":
             .groupby(
                 "Item_ID",
                 as_index=False
-            )
-            [
+            )[
                 [
                     "Opening_Stock_m",
                     "Produced_Qty_m",
@@ -2136,7 +2272,6 @@ elif page == "Analytics":
             ]
             .sum()
         )
-
 
         fig = px.bar(
             stock_analysis,
@@ -2148,7 +2283,7 @@ elif page == "Analytics":
                 "Closing_Stock_m"
             ],
             barmode="group",
-            title="Inventory Movement by Item"
+            title="Inventory Movement"
         )
 
         fig.update_layout(
@@ -2161,9 +2296,9 @@ elif page == "Analytics":
         )
 
 
-# =========================================================
+# ============================================================
 # DATA MANAGEMENT
-# =========================================================
+# ============================================================
 
 elif page == "Data Management":
 
@@ -2175,34 +2310,31 @@ elif page == "Data Management":
     st.title("Data Management")
 
     st.caption(
-        "Live Supabase database overview."
+        "Live data loaded directly from Supabase."
     )
 
 
-    # =====================================================
-    # TABLE COUNTS
-    # =====================================================
+    # ========================================================
+    # DATABASE COUNTS
+    # ========================================================
 
-    c1, c2, c3 = st.columns(3)
+    a, b, c = st.columns(3)
 
-
-    with c1:
+    with a:
 
         st.metric(
             "Item Records",
             len(items)
         )
 
-
-    with c2:
+    with b:
 
         st.metric(
             "Production Records",
             len(production)
         )
 
-
-    with c3:
+    with c:
 
         st.metric(
             "Stock Records",
@@ -2213,12 +2345,12 @@ elif page == "Data Management":
     st.markdown("---")
 
 
-    # =====================================================
-    # ITEM TABLE
-    # =====================================================
+    # ========================================================
+    # ITEM DATA
+    # ========================================================
 
     with st.expander(
-        "Item Registration Table",
+        "Item Registration",
         expanded=True
     ):
 
@@ -2229,12 +2361,12 @@ elif page == "Data Management":
         )
 
 
-    # =====================================================
-    # PRODUCTION TABLE
-    # =====================================================
+    # ========================================================
+    # PRODUCTION DATA
+    # ========================================================
 
     with st.expander(
-        "Production Table"
+        "Production"
     ):
 
         st.dataframe(
@@ -2244,12 +2376,12 @@ elif page == "Data Management":
         )
 
 
-    # =====================================================
-    # STOCK TABLE
-    # =====================================================
+    # ========================================================
+    # STOCK DATA
+    # ========================================================
 
     with st.expander(
-        "Stock Control Table"
+        "Stock Control"
     ):
 
         st.dataframe(
@@ -2259,14 +2391,11 @@ elif page == "Data Management":
         )
 
 
-    # =====================================================
-    # REFRESH
-    # =====================================================
-
     st.markdown("---")
 
+
     if st.button(
-        "Refresh Database Data"
+        "Refresh Live Data"
     ):
 
         refresh_data()
@@ -2274,9 +2403,9 @@ elif page == "Data Management":
         st.rerun()
 
 
-# =========================================================
+# ============================================================
 # FOOTER
-# =========================================================
+# ============================================================
 
 st.markdown("---")
 
