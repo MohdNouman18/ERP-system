@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -11,7 +12,7 @@ from datetime import date
 
 st.set_page_config(
     page_title="Flex Head Industries | ERP",
-    page_icon="🏭",
+    page_icon="logo.png" if os.path.exists("logo.png") else None,
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -27,7 +28,7 @@ def load_css():
             css = f.read()
         st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
     except FileNotFoundError:
-        st.warning("style.css nahi mili. app.py aur style.css same folder mein honi chahiye.")
+        st.warning("style.css not found. app.py and style.css must be in the same folder.")
 
 
 load_css()
@@ -41,14 +42,14 @@ try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 except Exception:
-    st.error("❌ Supabase Secrets missing.")
-    st.info("Streamlit Cloud → Settings → Secrets mein SUPABASE_URL aur SUPABASE_KEY add karo.")
+    st.error("Supabase secrets missing.")
+    st.info("Streamlit Cloud -> Settings -> Secrets: add SUPABASE_URL and SUPABASE_KEY.")
     st.stop()
 
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    st.error("❌ Supabase connection failed.")
+    st.error("Supabase connection failed.")
     st.code(str(e))
     st.stop()
 
@@ -162,18 +163,17 @@ def rls_hint(err, table, action="insert"):
     err_low = err.lower()
     if "row-level security" in err_low or "rls" in err_low or "policy" in err_low:
         return (
-            f"👉 Supabase → Authentication → Policies → `{table}` → "
-            f"New Policy → allow **{action.upper()}** for `anon` and `authenticated`. "
-            f"Or SQL Editor mein: `CREATE POLICY \"all\" ON \"{table}\" FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);`"
+            f"Supabase -> Authentication -> Policies -> {table} -> "
+            f"New Policy -> allow {action.upper()} for anon and authenticated."
         )
     if "does not exist" in err_low and "relation" in err_low:
-        return f"👉 Table `{table}` Supabase mein exist nahi karti. Pehle create karo."
+        return f"Table {table} does not exist in Supabase. Create it first."
     if "column" in err_low and "does not exist" in err_low:
-        return f"👉 `{table}` mein column names match nahi kar rahe. Postgres columns case-sensitive hote hain."
+        return f"Column name mismatch on {table}. Postgres columns are case-sensitive."
     if "permission denied" in err_low:
-        return f"👉 `{table}` par anon role ko permission nahi. RLS policy check karo."
+        return f"Permission denied on {table}. Check RLS policies."
     if "duplicate key" in err_low or "unique constraint" in err_low:
-        return f"👉 `{table}` mein ye ID pehle se maujood hai."
+        return f"Duplicate ID in {table}. Refresh and try again."
     return None
 
 
@@ -184,8 +184,7 @@ def empty_state(msg, cta=None):
                     background: rgba(255,193,7,0.08);
                     border: 1px solid rgba(255,193,7,0.35);
                     color: #f5c542; text-align: center; margin: 12px 0;">
-            <div style="font-size: 42px; margin-bottom: 6px;">📭</div>
-            <div style="font-size: 16px; font-weight: 600;">{msg}</div>
+            <div style="font-size: 15px; font-weight: 600;">{msg}</div>
             {f'<div style="margin-top:8px; font-size:13px; opacity:0.85;">{cta}</div>' if cta else ''}
         </div>
         """,
@@ -198,13 +197,21 @@ def empty_state(msg, cta=None):
 # =========================================================
 
 with st.sidebar:
+
+    # -------- BRAND + LOGO --------
+    if os.path.exists("logo.png"):
+        st.image("logo.png", use_container_width=True)
+    elif os.path.exists("logo.jpg"):
+        st.image("logo.jpg", use_container_width=True)
+
     st.markdown(
         """
-        <div class="brand">
-            <div class="brand-mark">FH</div>
-            <div>
-                <div class="brand-name">Flex Head Industries</div>
-                <div class="brand-sub">ERP MANAGEMENT SYSTEM</div>
+        <div style="text-align: center; padding: 4px 0 12px 0;">
+            <div style="font-size: 15px; font-weight: 700; letter-spacing: 0.5px;">
+                Flex Head Industries
+            </div>
+            <div style="font-size: 10px; letter-spacing: 2px; opacity: 0.6; margin-top: 2px;">
+                ERP MANAGEMENT SYSTEM
             </div>
         </div>
         """,
@@ -228,7 +235,7 @@ with st.sidebar:
 
     st.markdown("---")
 
-    if st.button("🔄 Refresh Data", use_container_width=True):
+    if st.button("Refresh Data", use_container_width=True):
         refresh_all()
 
 
@@ -257,10 +264,10 @@ def data_banner():
         if no_stock:
             missing.append("Stock")
         st.warning(
-            f"⚠️ **{' aur '.join(missing)}** table(s) mein koi record nahi hai — "
-            f"isi liye neeche charts, dashboard aur analytics khaali dikh rahe hain.\n\n"
-            f"**Solution:** Left sidebar → **Production** ya **Stock Control** module khol kar "
-            f"records add karo, ya **Data Management → Load Demo Data** click karo (test ke liye)."
+            f"{' and '.join(missing)} table(s) have no records yet, "
+            f"so the charts, dashboard and analytics below appear empty.\n\n"
+            f"Solution: open the Production or Stock Control module from the sidebar "
+            f"to add records, or use Data Management -> Demo Data (for testing)."
         )
 
 
@@ -290,7 +297,6 @@ if page == "Executive Dashboard":
     with c1:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-icon">▣</div>
                 <div class="metric-label">Registered Items</div>
                 <div class="metric-value">{registered_items:,}</div>
                 <div class="metric-caption">Total product items</div>
@@ -300,7 +306,6 @@ if page == "Executive Dashboard":
     with c2:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-icon">✓</div>
                 <div class="metric-label">Good Production</div>
                 <div class="metric-value">{good_production:,.0f} m</div>
                 <div class="metric-caption">Accepted production</div>
@@ -310,7 +315,6 @@ if page == "Executive Dashboard":
     with c3:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-icon">▤</div>
                 <div class="metric-label">Current Stock</div>
                 <div class="metric-value">{current_stock:,.0f} m</div>
                 <div class="metric-caption">Available inventory</div>
@@ -320,7 +324,6 @@ if page == "Executive Dashboard":
     with c4:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-icon">%</div>
                 <div class="metric-label">Production Yield</div>
                 <div class="metric-value">{yield_percentage:.1f}%</div>
                 <div class="metric-caption">Good output ratio</div>
@@ -347,7 +350,7 @@ if page == "Executive Dashboard":
             st.plotly_chart(fig, use_container_width=True)
         else:
             empty_state("No production records found.",
-                        "Sidebar → **Production** module → **Add Production** tab se record add karo.")
+                        "Open the Production module from the sidebar to add records.")
 
     with right:
         st.subheader("Production Overview")
@@ -379,7 +382,7 @@ if page == "Executive Dashboard":
         st.plotly_chart(fig, use_container_width=True)
     else:
         empty_state("No stock records found.",
-                    "Sidebar → **Stock Control** module → **Add Stock** tab se record add karo.")
+                    "Open the Stock Control module from the sidebar to add records.")
 
 
 # =========================================================
@@ -391,14 +394,14 @@ elif page == "Item Registration":
     st.title("Item Registration")
 
     if items_err:
-        st.error(f"❌ Failed to load Item table: {items_err}")
+        st.error(f"Failed to load Item table: {items_err}")
         hint = rls_hint(items_err, ITEM_TABLE, "select")
         if hint: st.info(hint)
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Item", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("🔎 Search Item", placeholder="Item ID, Item Code, Grade...")
+        search = st.text_input("Search Item", placeholder="Item ID, Item Code, Grade...")
         display = items.copy()
         if search and not display.empty:
             mask = display.astype(str).apply(
@@ -426,7 +429,7 @@ elif page == "Item Registration":
                 color = st.text_input("Color")
                 standard_length = st.number_input("Standard Length", min_value=1, value=1, step=1)
                 unit = st.text_input("Unit", value="Meter")
-            submit = st.form_submit_button("➕ Add Item", type="primary")
+            submit = st.form_submit_button("Add Item", type="primary")
 
         if submit:
             payload = {
@@ -443,10 +446,10 @@ elif page == "Item Registration":
             }
             try:
                 supabase.table(ITEM_TABLE).insert(payload).execute()
-                st.success(f"✅ Item {next_item_id} added.")
+                st.success(f"Item {next_item_id} added.")
                 refresh_all()
             except Exception as e:
-                st.error("❌ Item add failed.")
+                st.error("Item add failed.")
                 st.code(str(e))
                 hint = rls_hint(str(e), ITEM_TABLE, "insert")
                 if hint: st.info(hint)
@@ -476,7 +479,7 @@ elif page == "Item Registration":
                     new_length = st.number_input("Standard Length", min_value=1,
                                                  value=max(1, int(selected["Standard_Length"])), step=1)
                     new_unit = st.text_input("Unit", value=str(selected["Unit"]) if pd.notna(selected["Unit"]) else "")
-                update = st.form_submit_button("💾 Update Item", type="primary")
+                update = st.form_submit_button("Update Item", type="primary")
 
             if update:
                 payload = {
@@ -487,22 +490,22 @@ elif page == "Item Registration":
                 }
                 try:
                     supabase.table(ITEM_TABLE).update(payload).eq("Item_ID", selected_id).execute()
-                    st.success("✅ Item updated.")
+                    st.success("Item updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Update failed.")
+                    st.error("Update failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), ITEM_TABLE, "update")
                     if hint: st.info(hint)
 
             st.markdown("---")
-            if st.button("🗑️ Delete Item", type="secondary"):
+            if st.button("Delete Item", type="secondary"):
                 try:
                     supabase.table(ITEM_TABLE).delete().eq("Item_ID", selected_id).execute()
-                    st.success("✅ Item deleted.")
+                    st.success("Item deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Delete failed.")
+                    st.error("Delete failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), ITEM_TABLE, "delete")
                     if hint: st.info(hint)
@@ -517,21 +520,20 @@ elif page == "Production":
     st.title("Production")
 
     if production_err:
-        st.error(f"❌ Failed to load Production table: {production_err}")
+        st.error(f"Failed to load Production table: {production_err}")
         hint = rls_hint(production_err, PRODUCTION_TABLE, "select")
         if hint: st.info(hint)
 
     if len(production) == 0 and not production_err:
         st.info(
-            "ℹ️ Production table khaali hai. Neeche **Add Production** tab se pehla "
-            "record add karo. Agar add karne pe error aata hai, to RLS policy issue hai — "
-            "Data Management → Diagnostics mein detail dekho."
+            "Production table is empty. Add the first record from the Add Production tab below. "
+            "If an error appears while adding, it is an RLS policy issue — see Data Management -> Diagnostics."
         )
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Production", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("🔎 Search Production", placeholder="Production ID, Item ID, Batch...")
+        search = st.text_input("Search Production", placeholder="Production ID, Item ID, Batch...")
         display = production.copy()
         if search and not display.empty:
             mask = display.astype(str).apply(
@@ -546,7 +548,7 @@ elif page == "Production":
         st.info(f"Next Production ID: {next_production_id}")
 
         if items.empty:
-            st.warning("Pehle **Item Registration** mein item add karo.")
+            st.warning("Add an item in Item Registration first.")
         else:
             with st.form("add_production_form"):
                 c1, c2, c3 = st.columns(3)
@@ -563,7 +565,7 @@ elif page == "Production":
                     rejected_qty = st.number_input("Rejected Quantity (m)", min_value=0, value=0, step=1)
                     status = st.selectbox("Production Status",
                                           ["Completed", "In Progress", "Pending", "Rejected"])
-                submit = st.form_submit_button("➕ Add Production", type="primary")
+                submit = st.form_submit_button("Add Production", type="primary")
 
             if submit:
                 payload = {
@@ -579,10 +581,10 @@ elif page == "Production":
                 }
                 try:
                     supabase.table(PRODUCTION_TABLE).insert(payload).execute()
-                    st.success(f"✅ Production {next_production_id} added.")
+                    st.success(f"Production {next_production_id} added.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Production add failed.")
+                    st.error("Production add failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), PRODUCTION_TABLE, "insert")
                     if hint: st.info(hint)
@@ -616,7 +618,7 @@ elif page == "Production":
                         "Production Status", status_options,
                         index=(status_options.index(current_status) if current_status in status_options else 0)
                     )
-                update = st.form_submit_button("💾 Update Production", type="primary")
+                update = st.form_submit_button("Update Production", type="primary")
 
             if update:
                 payload = {
@@ -626,21 +628,21 @@ elif page == "Production":
                 }
                 try:
                     supabase.table(PRODUCTION_TABLE).update(payload).eq("Production_ID", selected_id).execute()
-                    st.success("✅ Production updated.")
+                    st.success("Production updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Update failed.")
+                    st.error("Update failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), PRODUCTION_TABLE, "update")
                     if hint: st.info(hint)
 
-            if st.button("🗑️ Delete Production"):
+            if st.button("Delete Production"):
                 try:
                     supabase.table(PRODUCTION_TABLE).delete().eq("Production_ID", selected_id).execute()
-                    st.success("✅ Production deleted.")
+                    st.success("Production deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Delete failed.")
+                    st.error("Delete failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), PRODUCTION_TABLE, "delete")
                     if hint: st.info(hint)
@@ -655,21 +657,20 @@ elif page == "Stock Control":
     st.title("Stock Control")
 
     if stock_err:
-        st.error(f"❌ Failed to load Stock table: {stock_err}")
+        st.error(f"Failed to load Stock table: {stock_err}")
         hint = rls_hint(stock_err, STOCK_TABLE, "select")
         if hint: st.info(hint)
 
     if len(stock) == 0 and not stock_err:
         st.info(
-            "ℹ️ Stock table khaali hai. Neeche **Add Stock** tab se pehla record add karo. "
-            "Agar add karne pe error aata hai, to RLS policy issue hai — "
-            "Data Management → Diagnostics mein detail dekho."
+            "Stock table is empty. Add the first record from the Add Stock tab below. "
+            "If an error appears while adding, it is an RLS policy issue — see Data Management -> Diagnostics."
         )
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Stock", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("🔎 Search Stock", placeholder="Stock ID, Item ID, Production ID...")
+        search = st.text_input("Search Stock", placeholder="Stock ID, Item ID, Production ID...")
         display = stock.copy()
         if search and not display.empty:
             mask = display.astype(str).apply(
@@ -684,9 +685,9 @@ elif page == "Stock Control":
         st.info(f"Next Stock ID: {next_stock_id}")
 
         if items.empty:
-            st.warning("Pehle **Item Registration** mein item add karo.")
+            st.warning("Add an item in Item Registration first.")
         elif production.empty:
-            st.warning("Pehle **Production** record add karo.")
+            st.warning("Add a production record first.")
         else:
             with st.form("add_stock_form"):
                 c1, c2, c3 = st.columns(3)
@@ -705,7 +706,7 @@ elif page == "Stock Control":
                     closing_stock = st.number_input("Closing Stock (m)", min_value=0, value=0, step=1)
                     stock_status = st.selectbox("Stock Status",
                                                 ["Available", "Low Stock", "Out of Stock", "Reserved"])
-                submit = st.form_submit_button("➕ Add Stock", type="primary")
+                submit = st.form_submit_button("Add Stock", type="primary")
 
             if submit:
                 payload = {
@@ -722,10 +723,10 @@ elif page == "Stock Control":
                 }
                 try:
                     supabase.table(STOCK_TABLE).insert(payload).execute()
-                    st.success(f"✅ Stock {next_stock_id} added.")
+                    st.success(f"Stock {next_stock_id} added.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Stock add failed.")
+                    st.error("Stock add failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), STOCK_TABLE, "insert")
                     if hint: st.info(hint)
@@ -759,7 +760,7 @@ elif page == "Stock Control":
                         "Stock Status", status_options,
                         index=(status_options.index(current_status) if current_status in status_options else 0)
                     )
-                update = st.form_submit_button("💾 Update Stock", type="primary")
+                update = st.form_submit_button("Update Stock", type="primary")
 
             if update:
                 payload = {
@@ -769,21 +770,21 @@ elif page == "Stock Control":
                 }
                 try:
                     supabase.table(STOCK_TABLE).update(payload).eq("Stock_ID", selected_id).execute()
-                    st.success("✅ Stock updated.")
+                    st.success("Stock updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Update failed.")
+                    st.error("Update failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), STOCK_TABLE, "update")
                     if hint: st.info(hint)
 
-            if st.button("🗑️ Delete Stock"):
+            if st.button("Delete Stock"):
                 try:
                     supabase.table(STOCK_TABLE).delete().eq("Stock_ID", selected_id).execute()
-                    st.success("✅ Stock deleted.")
+                    st.success("Stock deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error("❌ Delete failed.")
+                    st.error("Delete failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), STOCK_TABLE, "delete")
                     if hint: st.info(hint)
@@ -817,7 +818,7 @@ elif page == "Analytics":
         st.plotly_chart(fig, use_container_width=True)
     else:
         empty_state("No production data available.",
-                    "Sidebar → **Production** module se record add karo.")
+                    "Open the Production module from the sidebar to add records.")
 
     st.markdown("---")
 
@@ -836,7 +837,7 @@ elif page == "Analytics":
         st.plotly_chart(fig, use_container_width=True)
     else:
         empty_state("No stock data available.",
-                    "Sidebar → **Stock Control** module se record add karo.")
+                    "Open the Stock Control module from the sidebar to add records.")
 
 
 # =========================================================
@@ -846,10 +847,9 @@ elif page == "Analytics":
 elif page == "Custom Charts":
 
     st.title("Custom Charts")
-    st.caption("Apni marzi se charts banao — data source, chart type, axis aur aggregation choose karo.")
+    st.caption("Build your own charts — choose data source, chart type, axes and aggregation.")
 
-    # ---------- Data Source ----------
-    st.markdown("### 1️⃣ Data Source")
+    st.markdown("### 1. Data Source")
 
     source_options = {
         "Production": production,
@@ -858,7 +858,7 @@ elif page == "Custom Charts":
     }
 
     source_name = st.selectbox(
-        "Kaunsa dataset use karna hai?",
+        "Select a dataset",
         list(source_options.keys())
     )
 
@@ -866,17 +866,16 @@ elif page == "Custom Charts":
 
     if df.empty:
         empty_state(
-            f"**{source_name}** mein koi record nahi hai.",
-            "Pehle us module mein records add karo, phir yahan wapas aao."
+            f"{source_name} has no records.",
+            "Add records in that module first, then come back here."
         )
         st.stop()
 
-    # ---------- Optional filters ----------
-    st.markdown("### 2️⃣ Filters (optional)")
+    st.markdown("### 2. Filters (optional)")
 
-    with st.expander("🔍 Filter apply karo", expanded=False):
+    with st.expander("Apply filters", expanded=False):
         filter_cols = st.multiselect(
-            "Filter kis column par lagana hai?",
+            "Filter by column",
             options=[c for c in df.columns if df[c].dtype == "object" or df[c].nunique() < 30],
             default=[]
         )
@@ -887,18 +886,17 @@ elif page == "Custom Charts":
             unique_vals = df[col].dropna().astype(str).unique().tolist()
             if not unique_vals:
                 continue
-            picked = st.multiselect(f"`{col}` mein se choose karo", unique_vals,
+            picked = st.multiselect(f"Values for {col}", unique_vals,
                                     default=unique_vals, key=f"filter_{col}")
             filtered_df = filtered_df[filtered_df[col].astype(str).isin(picked)]
 
     df = filtered_df
 
     if df.empty:
-        st.warning("Filters ke baad koi data nahi bacha. Filters change karo.")
+        st.warning("No data left after filters. Change the filters.")
         st.stop()
 
-    # ---------- Chart config ----------
-    st.markdown("### 3️⃣ Chart Configuration")
+    st.markdown("### 3. Chart Configuration")
 
     numeric_cols = [c for c in df.columns
                     if pd.api.types.is_numeric_dtype(df[c])]
@@ -927,15 +925,8 @@ elif page == "Custom Charts":
                               index=(all_cols.index("Item_ID") if "Item_ID" in all_cols else 0))
 
     with c2:
-        if chart_type == "Histogram":
-            y_axis = st.selectbox("Y-axis (numeric)",
-                                  numeric_cols if numeric_cols else ["(no numeric column)"])
-        elif chart_type == "Pie Chart" or chart_type == "Donut Chart":
-            y_axis = st.selectbox("Values (numeric)",
-                                  numeric_cols if numeric_cols else ["(no numeric column)"])
-        else:
-            y_axis = st.selectbox("Y-axis (numeric)",
-                                  numeric_cols if numeric_cols else ["(no numeric column)"])
+        y_axis = st.selectbox("Y-axis (numeric)",
+                              numeric_cols if numeric_cols else ["(no numeric column)"])
 
     with c3:
         color_by = st.selectbox(
@@ -944,28 +935,23 @@ elif page == "Custom Charts":
             index=0
         )
 
-    # ---------- Aggregation ----------
     agg_choice = "None"
     if chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
         agg_choice = st.selectbox(
-            "Aggregation (agar ek hi X pe multiple rows hain)",
+            "Aggregation (when X has multiple rows)",
             ["sum", "mean", "count", "max", "min"],
             index=0
         )
 
-    # ---------- Optional: top N ----------
-    top_n = st.slider("Top N categories dikhao (0 = sab)", 0, 50, 0)
+    top_n = st.slider("Show top N categories (0 = all)", 0, 50, 0)
 
-    # ---------- Sort ----------
     sort_order = st.radio("Sort order", ["Descending", "Ascending", "None"], horizontal=True)
 
-    # ---------- Build chart ----------
-    st.markdown("### 4️⃣ Chart")
+    st.markdown("### 4. Chart")
 
     plot_df = df.copy()
 
     try:
-        # Aggregation
         if agg_choice != "None" and chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
             group_cols = [x_axis]
             if color_by != "(none)" and color_by != x_axis:
@@ -987,7 +973,6 @@ elif page == "Custom Charts":
         else:
             y_plot = y_axis
 
-        # Sort + top N
         if agg_choice != "None" and y_plot in plot_df.columns and sort_order != "None":
             plot_df = plot_df.sort_values(
                 y_plot, ascending=(sort_order == "Ascending")
@@ -996,7 +981,6 @@ elif page == "Custom Charts":
         if top_n > 0 and y_plot in plot_df.columns:
             plot_df = plot_df.head(top_n)
 
-        # Render
         if chart_type == "Bar Chart":
             fig = px.bar(plot_df, x=x_axis, y=y_plot,
                          color=(color_by if color_by != "(none)" else None),
@@ -1049,24 +1033,22 @@ elif page == "Custom Charts":
             )
             st.plotly_chart(fig, use_container_width=True)
 
-        # ---------- Show underlying data ----------
-        with st.expander("📊 Chart ke peeche ka data dekho"):
+        with st.expander("View underlying chart data"):
             st.dataframe(plot_df, use_container_width=True, hide_index=True)
             st.caption(f"{len(plot_df)} row(s)")
 
-        # ---------- Download ----------
         csv = plot_df.to_csv(index=False).encode("utf-8")
         st.download_button(
-            "⬇️ Download chart data as CSV",
+            "Download chart data as CSV",
             data=csv,
             file_name=f"custom_chart_{source_name.lower().replace(' ', '_')}.csv",
             mime="text/csv"
         )
 
     except Exception as e:
-        st.error("❌ Chart banane mein error aaya.")
+        st.error("Error while building the chart.")
         st.code(str(e))
-        st.info("Try karo: X-axis aur Y-axis ke different combinations, ya color/group by hata do.")
+        st.info("Try a different X / Y combination, or clear Color / Group by.")
 
 
 # =========================================================
@@ -1076,7 +1058,7 @@ elif page == "Custom Charts":
 elif page == "Data Management":
 
     st.title("Data Management")
-    st.caption("Live database records + diagnostics.")
+    st.caption("Live database records and diagnostics.")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Item Records", len(items))
@@ -1085,18 +1067,16 @@ elif page == "Data Management":
 
     st.markdown("---")
 
-    # ---------- DEMO DATA SEEDER ----------
-    st.subheader("🧪 Test Connection (Demo Data)")
+    st.subheader("Test Connection (Demo Data)")
     st.caption(
-        "Ye button ek test production + stock record insert karega. "
-        "Agar insert success hua, to RLS bilkul theek hai aur aap manually "
-        "bhi records add kar sakte ho."
+        "This button inserts one test production and one test stock record. "
+        "If the insert succeeds, the RLS policies are correct and you can add records manually."
     )
 
     if items.empty:
-        st.warning("Pehle Item Registration mein ek item hona chahiye.")
+        st.warning("Add at least one item in Item Registration first.")
     else:
-        if st.button("📥 Insert 1 Demo Production + 1 Demo Stock Record"):
+        if st.button("Insert 1 Demo Production + 1 Demo Stock Record"):
             try:
                 pid = get_next_id(production, "Production_ID")
                 first_item_id = str(items["Item_ID"].iloc[0])
@@ -1114,7 +1094,7 @@ elif page == "Data Management":
                     "Production_Status": "Completed"
                 }
                 supabase.table(PRODUCTION_TABLE).insert(prod_payload).execute()
-                st.success(f"✅ Demo Production {pid} inserted.")
+                st.success(f"Demo Production {pid} inserted.")
 
                 sid = get_next_id(stock, "Stock_ID")
                 stock_payload = {
@@ -1130,13 +1110,13 @@ elif page == "Data Management":
                     "Stock_Status": "Available"
                 }
                 supabase.table(STOCK_TABLE).insert(stock_payload).execute()
-                st.success(f"✅ Demo Stock {sid} inserted.")
+                st.success(f"Demo Stock {sid} inserted.")
 
                 st.balloons()
                 refresh_all()
 
             except Exception as e:
-                st.error("❌ Demo insert failed.")
+                st.error("Demo insert failed.")
                 st.code(str(e))
                 hint = rls_hint(str(e), "Production/Stock", "insert")
                 if hint:
@@ -1144,21 +1124,20 @@ elif page == "Data Management":
 
     st.markdown("---")
 
-    # ---------- DIAGNOSTICS ----------
-    with st.expander("🔧 Table Diagnostics", expanded=False):
+    with st.expander("Table Diagnostics", expanded=False):
         diag = pd.DataFrame({
             "Table": [ITEM_TABLE, PRODUCTION_TABLE, STOCK_TABLE],
             "Rows Loaded": [len(items), len(production), len(stock)],
             "Status": [
-                "❌ Error" if items_err else "✅ OK",
-                "❌ Error" if production_err else ("⚠️ Empty" if len(production) == 0 else "✅ OK"),
-                "❌ Error" if stock_err else ("⚠️ Empty" if len(stock) == 0 else "✅ OK"),
+                "Error" if items_err else "OK",
+                "Error" if production_err else ("Empty" if len(production) == 0 else "OK"),
+                "Error" if stock_err else ("Empty" if len(stock) == 0 else "OK"),
             ],
             "Error": [items_err or "-", production_err or "-", stock_err or "-"]
         })
         st.dataframe(diag, use_container_width=True, hide_index=True)
 
-        if st.button("🔄 Force Reload All Data"):
+        if st.button("Force Reload All Data"):
             refresh_all()
 
     st.markdown("---")
@@ -1178,4 +1157,4 @@ elif page == "Data Management":
 # =========================================================
 
 st.markdown("---")
-st.caption("Flex Head Industries Pvt Ltd • ERP Management System")
+st.caption("Flex Head Industries Pvt Ltd | ERP Management System")
