@@ -24,6 +24,8 @@ DISPATCH_TABLE = "Dispatch_Qty"
 RETURN_TABLE = "Return_Qty"
 CLOSING_TABLE = "Closing_Stock"
 ADJUSTMENT_TABLE = "Stock_Adjustment"
+CHALLAN_TABLE = "Delivery_Challan"
+CHALLAN_ITEMS_TABLE = "Delivery_Challan_Items"
 
 ITEM_COLUMNS = (
     "Item_ID", "Item_Code", "Material_Grade", "Application",
@@ -43,6 +45,14 @@ CLOSING_COLUMNS = ("Closing_Stock_ID", "Item_ID", "Qty")
 ADJUSTMENT_COLUMNS = (
     "Adjustment_ID", "Item_ID", "Adjustment_Date",
     "Qty", "Reason", "Remarks"
+)
+CHALLAN_COLUMNS = (
+    "challan_id", "challan_no", "challan_date", "sent_to",
+    "vehicle_no", "received_by", "sent_by", "created_at"
+)
+CHALLAN_ITEMS_COLUMNS = (
+    "challan_item_id", "challan_id", "sr_no",
+    "item_id", "description", "quantity", "unit", "created_at"
 )
 
 ID_PREFIX = {
@@ -154,6 +164,8 @@ def load_all_data():
         (RETURN_TABLE, RETURN_COLUMNS, ("Qty",)),
         (CLOSING_TABLE, CLOSING_COLUMNS, ("Qty",)),
         (ADJUSTMENT_TABLE, ADJUSTMENT_COLUMNS, ("Qty",)),
+        (CHALLAN_TABLE, CHALLAN_COLUMNS, ()),
+        (CHALLAN_ITEMS_TABLE, CHALLAN_ITEMS_COLUMNS, ("quantity", "sr_no")),
     ]
 
     with ThreadPoolExecutor(max_workers=len(specs)) as pool:
@@ -173,29 +185,34 @@ def load_all_data():
     return_qty, return_err = results[5]
     closing, closing_err = results[6]
     adjustment, adjustment_err = results[7]
+    challans, challans_err = results[8]
+    challan_items, challan_items_err = results[9]
 
     return (
         items, production,
         opening, prod_qty, dispatch, return_qty, closing, adjustment,
+        challans, challan_items,
         items_err, production_err,
         opening_err, prod_qty_err, dispatch_err, return_err,
-        closing_err, adjustment_err
+        closing_err, adjustment_err,
+        challans_err, challan_items_err
     )
 
 
 (
     items, production,
     opening, prod_qty, dispatch, return_qty, closing, adjustment,
+    challans, challan_items,
     items_err, production_err,
     opening_err, prod_qty_err, dispatch_err, return_err,
-    closing_err, adjustment_err
+    closing_err, adjustment_err,
+    challans_err, challan_items_err
 ) = load_all_data()
 
 
 def get_next_id(df: pd.DataFrame, id_col: str, prefix: str) -> str:
     if df.empty or id_col not in df.columns:
         return f"{prefix}-001"
-
     nums = []
     for v in df[id_col].dropna().astype(str):
         if prefix and v.startswith(f"{prefix}-"):
@@ -206,16 +223,37 @@ def get_next_id(df: pd.DataFrame, id_col: str, prefix: str) -> str:
             nums.append(int(float(tail)))
         except (ValueError, TypeError):
             continue
-
     if not nums:
         return f"{prefix}-001"
-
     return f"{prefix}-{max(nums) + 1:03d}"
 
 
 def next_id_for(table_name: str, df: pd.DataFrame) -> str:
     id_col, prefix = ID_PREFIX[table_name]
     return get_next_id(df, id_col, prefix)
+
+
+def next_challan_no(df: pd.DataFrame) -> str:
+    """Generate next challan number like DC-2026-001."""
+    today = date.today()
+    yr = today.year
+    prefix = f"DC-{yr}-"
+
+    if df.empty or "challan_no" not in df.columns:
+        return f"{prefix}001"
+
+    nums = []
+    for v in df["challan_no"].dropna().astype(str):
+        if v.startswith(prefix):
+            tail = v[len(prefix):]
+            try:
+                nums.append(int(tail))
+            except ValueError:
+                continue
+
+    if not nums:
+        return f"{prefix}001"
+    return f"{prefix}{max(nums) + 1:03d}"
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -503,6 +541,7 @@ with st.sidebar:
             "Stock Control",
             "Stock Adjustment",
             "Physical Check",
+            "Delivery Challan",
             "Analytics",
             "Custom Charts",
             "Data Management"
@@ -1236,6 +1275,313 @@ elif page == "Physical Check":
         st.info("No adjustment records yet.")
 
 
+elif page == "Delivery Challan":
+
+    st.title("Delivery Challan")
+
+    if challans_err:
+        st.error(f"Failed to load Delivery_Challan: {challans_err}")
+        h = rls_hint(challans_err, CHALLAN_TABLE, "select")
+        if h: st.info(h)
+    if challan_items_err:
+        st.error(f"Failed to load Delivery_Challan_Items: {challan_items_err}")
+        h = rls_hint(challan_items_err, CHALLAN_ITEMS_TABLE, "select")
+        if h: st.info(h)
+
+    tab1, tab2, tab3 = st.tabs(["View Challans", "Create Challan", "Update / Delete"])
+
+    # ---- VIEW ----
+    with tab1:
+        if challans.empty:
+            st.info("No delivery challans yet. Create one from the Create Challan tab.")
+        else:
+            search = st.text_input("Search Challan",
+                                   placeholder="Challan No, Sent To, Vehicle...")
+            display = challans.copy()
+            if search:
+                display = filter_df(display, search)
+
+            display = display.sort_values(
+                by="challan_id", ascending=False
+            ) if "challan_id" in display.columns else display
+
+            st.dataframe(display, use_container_width=True, hide_index=True)
+            st.caption(f"{len(display)} challan(s)")
+
+            st.markdown("---")
+            st.subheader("Challan Details")
+            if not display.empty:
+                pick = st.selectbox(
+                    "Select Challan No to view items",
+                    display["challan_no"].astype(str).tolist()
+                )
+                picked_row = display.loc[
+                    display["challan_no"].astype(str) == pick
+                ].iloc[0]
+                picked_id = picked_row["challan_id"]
+
+                st.markdown(
+                    f"**Challan No:** {picked_row['challan_no']}  \n"
+                    f"**Date:** {picked_row['challan_date']}  \n"
+                    f"**Sent To:** {picked_row['sent_to']}  \n"
+                    f"**Vehicle:** {picked_row.get('vehicle_no', '-')}  \n"
+                    f"**Received By:** {picked_row.get('received_by', '-')}  \n"
+                    f"**Sent By:** {picked_row.get('sent_by', '-')}"
+                )
+
+                items_for_challan = challan_items[
+                    challan_items["challan_id"] == picked_id
+                ].sort_values("sr_no")
+
+                if not items_for_challan.empty:
+                    st.dataframe(
+                        items_for_challan,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("No items in this challan.")
+
+    # ---- CREATE ----
+    with tab2:
+        next_no = next_challan_no(challans)
+        st.info(f"Next Challan No: {next_no}")
+
+        with st.form("create_challan_form"):
+            st.markdown("#### Challan Header")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                challan_date = st.date_input("Challan Date", value=date.today())
+                sent_to = st.text_input("Sent To (Party / Customer)")
+            with c2:
+                vehicle_no = st.text_input("Vehicle No")
+                received_by = st.text_input("Received By")
+            with c3:
+                sent_by = st.text_input("Sent By")
+
+            st.markdown("---")
+            st.markdown("#### Challan Items")
+            st.caption("Har row ke liye Item ID, Description, Quantity aur Unit bharo. "
+                       "Khaali rows skip ho jayengi.")
+
+            num_rows = st.slider("Number of item rows", 1, 15, 3)
+
+            item_rows = []
+            item_options = get_item_options(items)
+
+            for i in range(num_rows):
+                st.markdown(f"**Item #{i + 1}**")
+                c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
+                with c1:
+                    if item_options:
+                        sel_item = st.selectbox(
+                            f"Item ID",
+                            ["(none)"] + item_options,
+                            key=f"ci_item_{i}"
+                        )
+                    else:
+                        sel_item = st.text_input(
+                            f"Item ID",
+                            key=f"ci_item_txt_{i}"
+                        )
+                with c2:
+                    desc = st.text_input(
+                        f"Description",
+                        key=f"ci_desc_{i}",
+                        placeholder="e.g. PE Pipe 20mm SDR-11 Black"
+                    )
+                with c3:
+                    qty = st.number_input(
+                        f"Quantity",
+                        min_value=0.0,
+                        value=0.0,
+                        step=1.0,
+                        key=f"ci_qty_{i}"
+                    )
+                with c4:
+                    unit = st.text_input(
+                        f"Unit",
+                        value="Meter",
+                        key=f"ci_unit_{i}"
+                    )
+                item_rows.append({
+                    "item_id": sel_item,
+                    "description": desc.strip(),
+                    "quantity": qty,
+                    "unit": unit.strip()
+                })
+
+            submit = st.form_submit_button("Create Challan", type="primary")
+
+        if submit:
+            if not sent_to.strip():
+                st.error("Sent To field required hai.")
+            else:
+                valid_rows = [
+                    r for r in item_rows
+                    if r["description"] and r["quantity"] > 0
+                ]
+
+                if not valid_rows:
+                    st.error("Kam se kam ek item row bharo (description + qty).")
+                else:
+                    try:
+                        # Insert header
+                        header_payload = {
+                            "challan_no": next_no,
+                            "challan_date": str(challan_date),
+                            "sent_to": sent_to.strip(),
+                            "vehicle_no": vehicle_no.strip() or None,
+                            "received_by": received_by.strip() or None,
+                            "sent_by": sent_by.strip() or None,
+                        }
+                        resp = supabase.table(CHALLAN_TABLE).insert(
+                            header_payload
+                        ).execute()
+
+                        if not resp.data:
+                            st.error("Challan header insert failed.")
+                        else:
+                            new_challan_id = resp.data[0]["challan_id"]
+
+                            # Insert items
+                            item_payloads = []
+                            for idx, r in enumerate(valid_rows, start=1):
+                                item_payloads.append({
+                                    "challan_id": new_challan_id,
+                                    "sr_no": idx,
+                                    "item_id": (r["item_id"]
+                                                if r["item_id"] != "(none)"
+                                                else None),
+                                    "description": r["description"],
+                                    "quantity": r["quantity"],
+                                    "unit": r["unit"] or "Meter"
+                                })
+
+                            supabase.table(CHALLAN_ITEMS_TABLE).insert(
+                                item_payloads
+                            ).execute()
+
+                            st.success(
+                                f"Challan {next_no} created with "
+                                f"{len(valid_rows)} item(s)."
+                            )
+                            refresh_all()
+
+                    except Exception as e:
+                        st.error("Challan create failed.")
+                        st.code(str(e))
+                        h = rls_hint(str(e), CHALLAN_TABLE, "insert")
+                        if h: st.info(h)
+
+    # ---- UPDATE / DELETE ----
+    with tab3:
+        if challans.empty:
+            st.info("No delivery challans to update.")
+        else:
+            selected_no = st.selectbox(
+                "Select Challan No",
+                challans["challan_no"].astype(str).tolist()
+            )
+            selected = challans.loc[
+                challans["challan_no"].astype(str) == selected_no
+            ].iloc[0]
+            selected_cid = selected["challan_id"]
+
+            with st.form("update_challan_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    edit_date = st.date_input(
+                        "Challan Date",
+                        value=pd.to_datetime(
+                            selected["challan_date"]
+                        ).date() if pd.notna(selected["challan_date"]) else date.today()
+                    )
+                    edit_to = st.text_input(
+                        "Sent To",
+                        value=str(selected["sent_to"]) if pd.notna(selected["sent_to"]) else ""
+                    )
+                with c2:
+                    edit_vehicle = st.text_input(
+                        "Vehicle No",
+                        value=str(selected["vehicle_no"]) if pd.notna(selected["vehicle_no"]) else ""
+                    )
+                    edit_received = st.text_input(
+                        "Received By",
+                        value=str(selected["received_by"]) if pd.notna(selected["received_by"]) else ""
+                    )
+                with c3:
+                    edit_sent = st.text_input(
+                        "Sent By",
+                        value=str(selected["sent_by"]) if pd.notna(selected["sent_by"]) else ""
+                    )
+
+                update_header = st.form_submit_button(
+                    "Update Header", type="primary"
+                )
+
+            if update_header:
+                try:
+                    supabase.table(CHALLAN_TABLE).update({
+                        "challan_date": str(edit_date),
+                        "sent_to": edit_to.strip(),
+                        "vehicle_no": edit_vehicle.strip() or None,
+                        "received_by": edit_received.strip() or None,
+                        "sent_by": edit_sent.strip() or None,
+                    }).eq("challan_id", selected_cid).execute()
+                    st.success("Challan header updated.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Update failed.")
+                    st.code(str(e))
+                    h = rls_hint(str(e), CHALLAN_TABLE, "update")
+                    if h: st.info(h)
+
+            st.markdown("---")
+            st.subheader("Challan Items")
+            current_items = challan_items[
+                challan_items["challan_id"] == selected_cid
+            ].sort_values("sr_no")
+
+            if current_items.empty:
+                st.info("No items for this challan.")
+            else:
+                st.dataframe(
+                    current_items,
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                del_item_id = st.selectbox(
+                    "Select Challan Item ID to delete",
+                    current_items["challan_item_id"].astype(str).tolist()
+                )
+                if st.button("Delete Selected Item", type="secondary"):
+                    try:
+                        supabase.table(CHALLAN_ITEMS_TABLE).delete().eq(
+                            "challan_item_id", del_item_id
+                        ).execute()
+                        st.success("Item deleted.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Delete failed.")
+                        st.code(str(e))
+
+            st.markdown("---")
+            if st.button("Delete Entire Challan", type="secondary"):
+                try:
+                    supabase.table(CHALLAN_TABLE).delete().eq(
+                        "challan_id", selected_cid
+                    ).execute()
+                    st.success("Challan deleted (items cascade removed).")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Delete failed.")
+                    st.code(str(e))
+                    h = rls_hint(str(e), CHALLAN_TABLE, "delete")
+                    if h: st.info(h)
+
+
 elif page == "Analytics":
 
     st.title("Analytics")
@@ -1286,6 +1632,8 @@ elif page == "Custom Charts":
         "Return Qty": return_qty,
         "Stock Adjustment": adjustment,
         "Stock Ledger": STOCK_LEDGER,
+        "Delivery Challan": challans,
+        "Delivery Challan Items": challan_items,
     }
 
     source_name = st.selectbox("Select a dataset", list(source_options.keys()))
@@ -1328,9 +1676,8 @@ elif page == "Custom Charts":
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        x_axis = st.selectbox("X-axis", all_cols,
-                              index=(all_cols.index("Item_ID")
-                                     if "Item_ID" in all_cols else 0))
+        default_x = "Item_ID" if "Item_ID" in all_cols else all_cols[0]
+        x_axis = st.selectbox("X-axis", all_cols, index=all_cols.index(default_x))
     with c2:
         y_axis = st.selectbox("Y-axis",
                               numeric_cols if numeric_cols else ["(no numeric)"])
@@ -1423,7 +1770,7 @@ elif page == "Data Management":
     c1.metric("Items", len(items))
     c2.metric("Production", len(production))
     c3.metric("Adjustments", len(adjustment))
-    c4.metric("Ledger Rows", len(STOCK_LEDGER))
+    c4.metric("Challans", len(challans))
 
     st.markdown("---")
 
@@ -1433,13 +1780,15 @@ elif page == "Data Management":
                 ITEM_TABLE, PRODUCTION_TABLE,
                 OPENING_TABLE, PRODUCTION_QTY_TABLE,
                 DISPATCH_TABLE, RETURN_TABLE,
-                CLOSING_TABLE, ADJUSTMENT_TABLE
+                CLOSING_TABLE, ADJUSTMENT_TABLE,
+                CHALLAN_TABLE, CHALLAN_ITEMS_TABLE
             ],
             "Rows": [
                 len(items), len(production),
                 len(opening), len(prod_qty),
                 len(dispatch), len(return_qty),
-                len(closing), len(adjustment)
+                len(closing), len(adjustment),
+                len(challans), len(challan_items)
             ],
             "Status": [
                 "Error" if items_err else "OK",
@@ -1450,6 +1799,8 @@ elif page == "Data Management":
                 "Error" if return_err else ("Empty" if return_qty.empty else "OK"),
                 "Error" if closing_err else ("Empty" if closing.empty else "OK"),
                 "Error" if adjustment_err else ("Empty" if adjustment.empty else "OK"),
+                "Error" if challans_err else ("Empty" if challans.empty else "OK"),
+                "Error" if challan_items_err else ("Empty" if challan_items.empty else "OK"),
             ],
             "Error": [
                 items_err or "-",
@@ -1460,6 +1811,8 @@ elif page == "Data Management":
                 return_err or "-",
                 closing_err or "-",
                 adjustment_err or "-",
+                challans_err or "-",
+                challan_items_err or "-",
             ]
         })
         st.dataframe(diag, use_container_width=True, hide_index=True)
@@ -1478,6 +1831,8 @@ elif page == "Data Management":
         ("Return Qty", return_qty),
         ("Closing Stock", closing),
         ("Stock Adjustment", adjustment),
+        ("Delivery Challan", challans),
+        ("Delivery Challan Items", challan_items),
     ]:
         st.subheader(label)
         st.dataframe(frame, use_container_width=True, hide_index=True)
