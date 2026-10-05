@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.express as px
 from supabase import create_client, Client
 from datetime import date
+from concurrent.futures import ThreadPoolExecutor
 
 
 # =========================================================
@@ -19,24 +20,37 @@ st.set_page_config(
 
 
 # =========================================================
-# LOAD EXTERNAL CSS
+# LOAD EXTERNAL CSS (cached to avoid disk IO on every rerun)
 # =========================================================
 
-def load_css():
+@st.cache_data(show_spinner=False)
+def _read_css():
     try:
         with open("style.css", "r", encoding="utf-8") as f:
-            css = f.read()
-        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+            return f.read()
     except FileNotFoundError:
+        return None
+
+
+def load_css():
+    css = _read_css()
+    if css is None:
         st.warning("style.css not found. app.py and style.css must be in the same folder.")
+    else:
+        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
 load_css()
 
 
 # =========================================================
-# SUPABASE CONNECTION
+# SUPABASE CONNECTION (cached singleton)
 # =========================================================
+
+@st.cache_resource(show_spinner=False)
+def get_supabase_client(url: str, key: str) -> Client:
+    return create_client(url, key)
+
 
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
@@ -47,7 +61,7 @@ except Exception:
     st.stop()
 
 try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    supabase: Client = get_supabase_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
     st.error("Supabase connection failed.")
     st.code(str(e))
@@ -87,17 +101,15 @@ CLOSING_COLUMNS = ["Closing_Stock_ID", "Item_ID", "Qty"]
 
 
 # =========================================================
-# HELPERS
+# HELPERS  (fast, vectorized)
 # =========================================================
 
-def normalize_columns(df, expected):
+def _normalize_columns(df: pd.DataFrame, expected: list) -> pd.DataFrame:
     if df is None or df.empty:
         return df
     lower_map = {c.lower(): c for c in df.columns}
-    rename = {}
-    for col in expected:
-        if col not in df.columns and col.lower() in lower_map:
-            rename[lower_map[col.lower()]] = col
+    rename = {lower_map[c.lower()]: c for c in expected
+              if c not in df.columns and c.lower() in lower_map}
     return df.rename(columns=rename) if rename else df
 
 
@@ -105,50 +117,96 @@ def make_df(data, columns):
     if not data:
         return pd.DataFrame(columns=columns)
     df = pd.DataFrame(data)
-    df = normalize_columns(df, columns)
-    for col in columns:
-        if col not in df.columns:
-            df[col] = None
+    df = _normalize_columns(df, columns)
+    # Add missing columns in one shot
+    missing = [c for c in columns if c not in df.columns]
+    if missing:
+        df = df.reindex(columns=list(df.columns) + missing)
     return df[columns]
 
 
-def convert_numeric(df, columns):
-    for col in columns:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+def convert_numeric(df: pd.DataFrame, columns: list) -> pd.DataFrame:
+    present = [c for c in columns if c in df.columns]
+    if present:
+        df[present] = df[present].apply(pd.to_numeric, errors="coerce").fillna(0)
     return df
 
 
-def load_table(table_name, columns, numeric_cols):
+# =========================================================
+# DATA LOADING — cached + parallel
+# =========================================================
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_one_table(table_name: str, columns: tuple, numeric_cols: tuple):
+    """Load a single table with caching. Returns (records, error)."""
     try:
         response = supabase.table(table_name).select("*").execute()
-        df = make_df(response.data or [], columns)
-        df = convert_numeric(df, numeric_cols)
-        return df, None
+        return response.data or [], None
     except Exception as e:
-        return pd.DataFrame(columns=columns), str(e)
+        return [], str(e)
 
 
-@st.cache_data(ttl=5, show_spinner=False)
+def _build_df(table_name, columns, numeric_cols):
+    records, err = _load_one_table(table_name, tuple(columns), tuple(numeric_cols))
+    if err:
+        return pd.DataFrame(columns=columns), err
+    df = make_df(records, columns)
+    df = convert_numeric(df, list(numeric_cols))
+    return df, None
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def load_all_data():
-    items, items_err = load_table(
-        ITEM_TABLE, ITEM_COLUMNS,
-        ["Nominal_Diameter_mm", "Wall_Thickness_mm", "Standard_Length"]
-    )
-    production, prod_err = load_table(
-        PRODUCTION_TABLE, PRODUCTION_COLUMNS,
-        ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"]
-    )
-    opening, opening_err = load_table(OPENING_TABLE, OPENING_COLUMNS, ["Qty"])
-    prod_qty, prod_qty_err = load_table(PRODUCTION_QTY_TABLE, PRODUCTION_QTY_COLUMNS, ["Qty"])
-    dispatch, dispatch_err = load_table(DISPATCH_TABLE, DISPATCH_COLUMNS, ["Qty"])
-    return_qty, return_err = load_table(RETURN_TABLE, RETURN_COLUMNS, ["Qty"])
-    closing, closing_err = load_table(CLOSING_TABLE, CLOSING_COLUMNS, ["Qty"])
+    """
+    Load all 7 tables in parallel using a thread pool.
+    Cache TTL = 60s. Manual refresh clears the cache.
+    Returns the same 14-tuple as before (backwards compatible).
+    """
+    tasks = [
+        (ITEM_TABLE, tuple(ITEM_COLUMNS),
+         ("Nominal_Diameter_mm", "Wall_Thickness_mm", "Standard_Length")),
+        (PRODUCTION_TABLE, tuple(PRODUCTION_COLUMNS),
+         ("Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m")),
+        (OPENING_TABLE, tuple(OPENING_COLUMNS), ("Qty",)),
+        (PRODUCTION_QTY_TABLE, tuple(PRODUCTION_QTY_COLUMNS), ("Qty",)),
+        (DISPATCH_TABLE, tuple(DISPATCH_COLUMNS), ("Qty",)),
+        (RETURN_TABLE, tuple(RETURN_COLUMNS), ("Qty",)),
+        (CLOSING_TABLE, tuple(CLOSING_COLUMNS), ("Qty",)),
+    ]
+
+    results = [None] * len(tasks)
+
+    def _run(idx, tname, cols, nums):
+        try:
+            resp = supabase.table(tname).select("*").execute()
+            records = resp.data or []
+            df = make_df(records, list(cols))
+            df = convert_numeric(df, list(nums))
+            results[idx] = (df, None)
+        except Exception as e:
+            results[idx] = (pd.DataFrame(columns=list(cols)), str(e))
+
+    with ThreadPoolExecutor(max_workers=7) as pool:
+        futures = [
+            pool.submit(_run, i, t, c, n)
+            for i, (t, c, n) in enumerate(tasks)
+        ]
+        for f in futures:
+            f.result()  # propagate exceptions (already handled)
+
+    # Unpack: each is (df, err)
+    (items, items_err)                 = results[0]
+    (production, production_err)       = results[1]
+    (opening, opening_err)             = results[2]
+    (prod_qty, prod_qty_err)           = results[3]
+    (dispatch, dispatch_err)           = results[4]
+    (return_qty, return_err)           = results[5]
+    (closing, closing_err)             = results[6]
 
     return (
         items, production,
         opening, prod_qty, dispatch, return_qty, closing,
-        items_err, prod_err,
+        items_err, production_err,
         opening_err, prod_qty_err, dispatch_err, return_err, closing_err
     )
 
@@ -161,6 +219,10 @@ def load_all_data():
 ) = load_all_data()
 
 
+# =========================================================
+# ID + CACHE UTILITIES
+# =========================================================
+
 def get_next_id(df, column):
     if df.empty or column not in df.columns:
         return "1"
@@ -171,9 +233,14 @@ def get_next_id(df, column):
 
 
 def refresh_all():
-    st.cache_data.clear()
+    """Clear only the cached data (keep CSS + client cached)."""
+    load_all_data.clear()
     st.rerun()
 
+
+# =========================================================
+# ERROR HINTS + EMPTY STATE
+# =========================================================
 
 def rls_hint(err, table, action="insert"):
     err_low = err.lower()
@@ -212,19 +279,7 @@ def empty_state(msg, cta=None):
 # REUSABLE CRUD BLOCK
 # =========================================================
 
-def crud_simple_table(
-    table_name,
-    df,
-    id_col,
-    label,
-    items_df,
-    load_error=None
-):
-    """
-    Generic CRUD UI for tables with columns: <ID>, Item_ID, Qty
-    Used by Opening_Stock, Production_Qty, Dispatch_Qty, Return_Qty, Closing_Stock.
-    """
-
+def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
         st.error(f"Failed to load {label}: {load_error}")
         hint = rls_hint(load_error, table_name, "select")
@@ -235,11 +290,10 @@ def crud_simple_table(
 
     tab1, tab2, tab3 = st.tabs([f"View {label}", f"Add {label}", "Update / Delete"])
 
-    # ---- VIEW ----
     with tab1:
         search = st.text_input(f"Search {label}", key=f"search_{table_name}",
                                placeholder=f"{id_col}, Item ID...")
-        display = df.copy()
+        display = df
         if search and not display.empty:
             mask = display.astype(str).apply(
                 lambda row: row.str.contains(search, case=False, na=False).any(), axis=1
@@ -248,7 +302,6 @@ def crud_simple_table(
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
 
-    # ---- ADD ----
     with tab2:
         next_id = get_next_id(df, id_col)
         st.info(f"Next {id_col}: {next_id}")
@@ -264,15 +317,10 @@ def crud_simple_table(
                 with c2:
                     qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0,
                                           key=f"add_qty_{table_name}")
-
                 submit = st.form_submit_button(f"Add {label}", type="primary")
 
             if submit:
-                payload = {
-                    id_col: next_id,
-                    "Item_ID": selected_item,
-                    "Qty": qty
-                }
+                payload = {id_col: next_id, "Item_ID": selected_item, "Qty": qty}
                 try:
                     supabase.table(table_name).insert(payload).execute()
                     st.success(f"{label} {next_id} added.")
@@ -283,7 +331,6 @@ def crud_simple_table(
                     hint = rls_hint(str(e), table_name, "insert")
                     if hint: st.info(hint)
 
-    # ---- UPDATE / DELETE ----
     with tab3:
         if df.empty:
             st.info(f"No {label} records.")
@@ -312,7 +359,6 @@ def crud_simple_table(
                         value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
                         step=1.0, key=f"edit_qty_{table_name}"
                     )
-
                 update = st.form_submit_button("Update", type="primary")
 
             if update:
@@ -402,16 +448,11 @@ st.markdown(
 
 def data_banner():
     empty = []
-    if len(opening) == 0 and not opening_err:
-        empty.append("Opening Stock")
-    if len(prod_qty) == 0 and not prod_qty_err:
-        empty.append("Production Qty")
-    if len(dispatch) == 0 and not dispatch_err:
-        empty.append("Dispatch Qty")
-    if len(return_qty) == 0 and not return_err:
-        empty.append("Return Qty")
-    if len(closing) == 0 and not closing_err:
-        empty.append("Closing Stock")
+    if len(opening) == 0 and not opening_err: empty.append("Opening Stock")
+    if len(prod_qty) == 0 and not prod_qty_err: empty.append("Production Qty")
+    if len(dispatch) == 0 and not dispatch_err: empty.append("Dispatch Qty")
+    if len(return_qty) == 0 and not return_err: empty.append("Return Qty")
+    if len(closing) == 0 and not closing_err: empty.append("Closing Stock")
 
     if empty:
         st.warning(
@@ -552,7 +593,7 @@ elif page == "Item Registration":
 
     with tab1:
         search = st.text_input("Search Item", placeholder="Item ID, Item Code, Grade...")
-        display = items.copy()
+        display = items
         if search and not display.empty:
             mask = display.astype(str).apply(
                 lambda row: row.str.contains(search, case=False, na=False).any(), axis=1
@@ -683,7 +724,7 @@ elif page == "Production":
 
     with tab1:
         search = st.text_input("Search Production", placeholder="Production ID, Item ID, Batch...")
-        display = production.copy()
+        display = production
         if search and not display.empty:
             mask = display.astype(str).apply(
                 lambda row: row.str.contains(search, case=False, na=False).any(), axis=1
