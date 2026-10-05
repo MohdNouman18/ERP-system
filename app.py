@@ -48,7 +48,7 @@ DISPATCH_COLUMNS = ("Dispatch_ID", "Item_ID", "Qty")
 RETURN_COLUMNS = ("Return_ID", "Item_ID", "Qty")
 CLOSING_COLUMNS = ("Closing_Stock_ID", "Item_ID", "Qty")
 
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 300
 
 
 # =========================================================
@@ -72,7 +72,7 @@ else:
 
 
 # =========================================================
-# SUPABASE CLIENT (cached resource)
+# SUPABASE CLIENT
 # =========================================================
 
 @st.cache_resource(show_spinner=False)
@@ -101,16 +101,12 @@ except Exception as e:
 # =========================================================
 
 def _normalize_columns(df: pd.DataFrame, expected: tuple) -> pd.DataFrame:
-    """Case-insensitive rename of columns to expected names."""
     if df is None or df.empty:
         return df
-
     exp_set = set(expected)
     df_cols = set(df.columns)
-
     if exp_set.issubset(df_cols):
         return df
-
     lower_map = {c.lower(): c for c in df.columns}
     rename = {
         lower_map[c.lower()]: c
@@ -121,22 +117,17 @@ def _normalize_columns(df: pd.DataFrame, expected: tuple) -> pd.DataFrame:
 
 
 def make_df(data, columns: tuple) -> pd.DataFrame:
-    """Build a DataFrame with the exact expected columns (fast path)."""
     if not data:
         return pd.DataFrame(columns=list(columns))
-
     df = pd.DataFrame(data)
     df = _normalize_columns(df, columns)
-
     missing = [c for c in columns if c not in df.columns]
     if missing:
         df = df.reindex(columns=list(df.columns) + missing)
-
     return df[list(columns)]
 
 
 def convert_numeric(df: pd.DataFrame, columns) -> pd.DataFrame:
-    """Vectorized numeric conversion — no .apply loop."""
     present = [c for c in columns if c in df.columns]
     if present:
         df[present] = df[present].apply(pd.to_numeric, errors="coerce").fillna(0)
@@ -144,11 +135,10 @@ def convert_numeric(df: pd.DataFrame, columns) -> pd.DataFrame:
 
 
 # =========================================================
-# PARALLEL DATA LOADING (single cache entry for all tables)
+# PARALLEL DATA LOADING
 # =========================================================
 
 def _fetch_raw(table_name: str):
-    """Fetch one table — returns (records, error). No caching here."""
     try:
         resp = supabase.table(table_name).select("*").execute()
         return resp.data or [], None
@@ -156,8 +146,7 @@ def _fetch_raw(table_name: str):
         return [], str(e)
 
 
-def _process(name: str, cols: tuple, num_cols: tuple, records, err):
-    """Build processed DataFrame from raw records."""
+def _process(cols: tuple, num_cols: tuple, records, err):
     if err:
         return pd.DataFrame(columns=list(cols)), err
     df = make_df(records, cols)
@@ -167,13 +156,11 @@ def _process(name: str, cols: tuple, num_cols: tuple, records, err):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def load_all_data():
-    """
-    Load all 7 tables in parallel, process them, and return as a single
-    cached tuple. Manual refresh clears this cache.
-    """
     specs = [
-        (ITEM_TABLE, ITEM_COLUMNS, ("Nominal_Diameter_mm", "Wall_Thickness_mm", "Standard_Length")),
-        (PRODUCTION_TABLE, PRODUCTION_COLUMNS, ("Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m")),
+        (ITEM_TABLE, ITEM_COLUMNS,
+         ("Nominal_Diameter_mm", "Wall_Thickness_mm", "Standard_Length")),
+        (PRODUCTION_TABLE, PRODUCTION_COLUMNS,
+         ("Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m")),
         (OPENING_TABLE, OPENING_COLUMNS, ("Qty",)),
         (PRODUCTION_QTY_TABLE, PRODUCTION_QTY_COLUMNS, ("Qty",)),
         (DISPATCH_TABLE, DISPATCH_COLUMNS, ("Qty",)),
@@ -182,12 +169,12 @@ def load_all_data():
     ]
 
     with ThreadPoolExecutor(max_workers=len(specs)) as pool:
-        raw_futures = [pool.submit(_fetch_raw, s[0]) for s in specs]
-        raw_results = [f.result() for f in raw_futures]
+        raw_results = [f.result() for f in
+                       [pool.submit(_fetch_raw, s[0]) for s in specs]]
 
     results = [
-        _process(specs[i][0], specs[i][1], specs[i][2], raw[0], raw[1])
-        for i, raw in enumerate(raw_results)
+        _process(specs[i][1], specs[i][2], raw_results[i][0], raw_results[i][1])
+        for i in range(len(specs))
     ]
 
     (items, items_err) = results[0]
@@ -215,12 +202,11 @@ def load_all_data():
 
 
 # =========================================================
-# DERIVED / CACHED HELPERS
+# DERIVED HELPERS
 # =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_item_options(items_df: pd.DataFrame) -> list:
-    """Cached list of Item_IDs (as strings)."""
     if items_df.empty:
         return []
     return items_df["Item_ID"].astype(str).tolist()
@@ -228,7 +214,6 @@ def get_item_options(items_df: pd.DataFrame) -> list:
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def compute_totals(production, opening, prod_qty, dispatch, return_qty, closing) -> dict:
-    """Pre-compute all dashboard/analytics totals in one cached pass."""
     good = float(production["Good_Qty_m"].sum()) if not production.empty else 0.0
     rejected = float(production["Rejected_Qty_m"].sum()) if not production.empty else 0.0
     planned = float(production["Planned_Qty_m"].sum()) if not production.empty else 0.0
@@ -262,7 +247,6 @@ def get_next_id(df: pd.DataFrame, column: str) -> str:
 
 
 def refresh_all():
-    """Clear the single data cache and rerun."""
     load_all_data.clear()
     get_item_options.clear()
     compute_totals.clear()
@@ -270,7 +254,6 @@ def refresh_all():
 
 
 def filter_df(df: pd.DataFrame, search: str) -> pd.DataFrame:
-    """Fast vectorized search across all columns (uses string concat)."""
     if not search or df.empty:
         return df
     search_lower = search.lower()
@@ -317,20 +300,20 @@ def empty_state(msg: str, cta: str = None):
 
 
 # =========================================================
-# GENERIC CRUD BLOCK (optimized)
+# GENERIC CRUD
 # =========================================================
 
 def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
         st.error(f"Failed to load {label}: {load_error}")
         hint = rls_hint(load_error, table_name, "select")
-        if hint: st.info(hint)
+        if hint:
+            st.info(hint)
     elif df.empty:
         st.info(f"{label} table is empty. Add the first record from the Add {label} tab below.")
 
     tab1, tab2, tab3 = st.tabs([f"View {label}", f"Add {label}", "Update / Delete"])
 
-    # ---- VIEW ----
     with tab1:
         search = st.text_input(
             f"Search {label}", key=f"search_{table_name}",
@@ -340,7 +323,6 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
 
-    # ---- ADD ----
     with tab2:
         next_id = get_next_id(df, id_col)
         st.info(f"Next {id_col}: {next_id}")
@@ -352,10 +334,11 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
             with st.form(f"add_{table_name}_form"):
                 c1, c2 = st.columns(2)
                 with c1:
-                    selected_item = st.selectbox("Item ID", options, key=f"add_item_{table_name}")
+                    selected_item = st.selectbox("Item ID", options,
+                                                 key=f"add_item_{table_name}")
                 with c2:
-                    qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0,
-                                          key=f"add_qty_{table_name}")
+                    qty = st.number_input("Quantity", min_value=0.0, value=0.0,
+                                          step=1.0, key=f"add_qty_{table_name}")
                 submit = st.form_submit_button(f"Add {label}", type="primary")
 
             if submit:
@@ -369,16 +352,18 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
                     st.error(f"{label} add failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), table_name, "insert")
-                    if hint: st.info(hint)
+                    if hint:
+                        st.info(hint)
 
-    # ---- UPDATE / DELETE ----
     with tab3:
         if df.empty:
             st.info(f"No {label} records.")
             return
 
         selected_id = st.selectbox(
-            f"Select {id_col}", df[id_col].astype(str).tolist(), key=f"sel_{table_name}"
+            f"Select {id_col}",
+            df[id_col].astype(str).tolist(),
+            key=f"sel_{table_name}"
         )
         selected = df.loc[df[id_col].astype(str) == selected_id].iloc[0]
 
@@ -413,7 +398,8 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.error("Update failed.")
                 st.code(str(e))
                 hint = rls_hint(str(e), table_name, "update")
-                if hint: st.info(hint)
+                if hint:
+                    st.info(hint)
 
         st.markdown("---")
         if st.button(f"Delete {label}", type="secondary", key=f"del_{table_name}"):
@@ -425,7 +411,8 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.error("Delete failed.")
                 st.code(str(e))
                 hint = rls_hint(str(e), table_name, "delete")
-                if hint: st.info(hint)
+                if hint:
+                    st.info(hint)
 
 
 # =========================================================
@@ -489,11 +476,16 @@ st.markdown(
 
 def data_banner():
     empty = []
-    if opening.empty and not opening_err: empty.append("Opening Stock")
-    if prod_qty.empty and not prod_qty_err: empty.append("Production Qty")
-    if dispatch.empty and not dispatch_err: empty.append("Dispatch Qty")
-    if return_qty.empty and not return_err: empty.append("Return Qty")
-    if closing.empty and not closing_err: empty.append("Closing Stock")
+    if opening.empty and not opening_err:
+        empty.append("Opening Stock")
+    if prod_qty.empty and not prod_qty_err:
+        empty.append("Production Qty")
+    if dispatch.empty and not dispatch_err:
+        empty.append("Dispatch Qty")
+    if return_qty.empty and not return_err:
+        empty.append("Return Qty")
+    if closing.empty and not closing_err:
+        empty.append("Closing Stock")
 
     if empty:
         st.warning(
@@ -515,6 +507,7 @@ if page == "Executive Dashboard":
     registered_items = len(items)
 
     c1, c2, c3, c4 = st.columns(4)
+
     with c1:
         st.markdown(f"""
             <div class="metric-card">
@@ -574,7 +567,8 @@ if page == "Executive Dashboard":
                 .rename_axis("Production_Status")
                 .reset_index(name="Count")
             )
-            fig = px.pie(status_df, names="Production_Status", values="Count", hole=0.5)
+            fig = px.pie(status_df, names="Production_Status",
+                         values="Count", hole=0.5)
             st.plotly_chart(fig, use_container_width=True)
         else:
             empty_state("No production records found.",
@@ -596,17 +590,22 @@ if page == "Executive Dashboard":
             empty_state("No production records found.")
 
     st.subheader("Stock Flow Overview")
-    flow_total = t["opening"] + t["prod_qty"] + t["dispatched"] + t["returned"] + t["closing"]
+    flow_total = (t["opening"] + t["prod_qty"] + t["dispatched"]
+                  + t["returned"] + t["closing"])
     if flow_total > 0:
         flow_data = pd.DataFrame({
             "Stage": ["Opening", "Produced", "Dispatched", "Returned", "Closing"],
-            "Qty": [t["opening"], t["prod_qty"], t["dispatched"], t["returned"], t["closing"]]
+            "Qty": [t["opening"], t["prod_qty"], t["dispatched"],
+                    t["returned"], t["closing"]]
         })
         fig = px.bar(flow_data, x="Stage", y="Qty", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        empty_state("No stock records found yet.",
-                    "Open the Stock Control module to add Opening / Production / Dispatch / Return / Closing records.")
+        empty_state(
+            "No stock records found yet.",
+            "Open the Stock Control module to add Opening / Production / "
+            "Dispatch / Return / Closing records."
+        )
 
 
 # =========================================================
@@ -620,12 +619,14 @@ elif page == "Item Registration":
     if items_err:
         st.error(f"Failed to load Item table: {items_err}")
         hint = rls_hint(items_err, ITEM_TABLE, "select")
-        if hint: st.info(hint)
+        if hint:
+            st.info(hint)
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Item", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("Search Item", placeholder="Item ID, Item Code, Grade...")
+        search = st.text_input("Search Item",
+                               placeholder="Item ID, Item Code, Grade...")
         display = filter_df(items, search)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
@@ -641,12 +642,15 @@ elif page == "Item Registration":
                 material_grade = st.selectbox("Material Grade", ["PE-80", "PE-100"])
                 application = st.text_input("Application")
             with c2:
-                diameter = st.number_input("Nominal Diameter (mm)", min_value=1, value=1, step=1)
-                wall = st.number_input("Wall Thickness (mm)", min_value=1, value=1, step=1)
+                diameter = st.number_input("Nominal Diameter (mm)", min_value=1,
+                                           value=1, step=1)
+                wall = st.number_input("Wall Thickness (mm)", min_value=1,
+                                       value=1, step=1)
                 sdr = st.text_input("SDR")
             with c3:
                 color = st.text_input("Color")
-                standard_length = st.number_input("Standard Length", min_value=1, value=1, step=1)
+                standard_length = st.number_input("Standard Length", min_value=1,
+                                                  value=1, step=1)
                 unit = st.text_input("Unit", value="Meter")
             submit = st.form_submit_button("Add Item", type="primary")
 
@@ -670,42 +674,74 @@ elif page == "Item Registration":
                 st.error("Item add failed.")
                 st.code(str(e))
                 hint = rls_hint(str(e), ITEM_TABLE, "insert")
-                if hint: st.info(hint)
+                if hint:
+                    st.info(hint)
 
     with tab3:
         if items.empty:
             st.info("No items available.")
         else:
-            selected_id = st.selectbox("Select Item ID", items["Item_ID"].astype(str).tolist())
-            selected = items.loc[items["Item_ID"].astype(str) == selected_id].iloc[0]
+            selected_id = st.selectbox("Select Item ID",
+                                       items["Item_ID"].astype(str).tolist())
+            selected = items.loc[
+                items["Item_ID"].astype(str) == selected_id
+            ].iloc[0]
 
             with st.form("update_item_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    new_code = st.text_input("Item Code", value=str(selected["Item_Code"]) if pd.notna(selected["Item_Code"]) else "")
-                    new_grade = st.selectbox("Material Grade", ["PE-80", "PE-100"],
-                                             index=(1 if str(selected["Material_Grade"]) == "PE-100" else 0))
-                    new_application = st.text_input("Application", value=str(selected["Application"]) if pd.notna(selected["Application"]) else "")
+                    new_code = st.text_input(
+                        "Item Code",
+                        value=str(selected["Item_Code"]) if pd.notna(selected["Item_Code"]) else ""
+                    )
+                    new_grade = st.selectbox(
+                        "Material Grade", ["PE-80", "PE-100"],
+                        index=(1 if str(selected["Material_Grade"]) == "PE-100" else 0)
+                    )
+                    new_application = st.text_input(
+                        "Application",
+                        value=str(selected["Application"]) if pd.notna(selected["Application"]) else ""
+                    )
                 with c2:
-                    new_diameter = st.number_input("Nominal Diameter (mm)", min_value=1,
-                                                   value=max(1, int(selected["Nominal_Diameter_mm"])), step=1)
-                    new_wall = st.number_input("Wall Thickness (mm)", min_value=1,
-                                               value=max(1, int(selected["Wall_Thickness_mm"])), step=1)
-                    new_sdr = st.text_input("SDR", value=str(selected["SDR"]) if pd.notna(selected["SDR"]) else "")
+                    new_diameter = st.number_input(
+                        "Nominal Diameter (mm)", min_value=1,
+                        value=max(1, int(selected["Nominal_Diameter_mm"])), step=1
+                    )
+                    new_wall = st.number_input(
+                        "Wall Thickness (mm)", min_value=1,
+                        value=max(1, int(selected["Wall_Thickness_mm"])), step=1
+                    )
+                    new_sdr = st.text_input(
+                        "SDR",
+                        value=str(selected["SDR"]) if pd.notna(selected["SDR"]) else ""
+                    )
                 with c3:
-                    new_color = st.text_input("Color", value=str(selected["Color"]) if pd.notna(selected["Color"]) else "")
-                    new_length = st.number_input("Standard Length", min_value=1,
-                                                 value=max(1, int(selected["Standard_Length"])), step=1)
-                    new_unit = st.text_input("Unit", value=str(selected["Unit"]) if pd.notna(selected["Unit"]) else "")
+                    new_color = st.text_input(
+                        "Color",
+                        value=str(selected["Color"]) if pd.notna(selected["Color"]) else ""
+                    )
+                    new_length = st.number_input(
+                        "Standard Length", min_value=1,
+                        value=max(1, int(selected["Standard_Length"])), step=1
+                    )
+                    new_unit = st.text_input(
+                        "Unit",
+                        value=str(selected["Unit"]) if pd.notna(selected["Unit"]) else ""
+                    )
                 update = st.form_submit_button("Update Item", type="primary")
 
             if update:
                 try:
                     supabase.table(ITEM_TABLE).update({
-                        "Item_Code": new_code, "Material_Grade": new_grade,
-                        "Application": new_application, "Nominal_Diameter_mm": new_diameter,
-                        "Wall_Thickness_mm": new_wall, "SDR": new_sdr,
-                        "Color": new_color, "Standard_Length": new_length, "Unit": new_unit
+                        "Item_Code": new_code,
+                        "Material_Grade": new_grade,
+                        "Application": new_application,
+                        "Nominal_Diameter_mm": new_diameter,
+                        "Wall_Thickness_mm": new_wall,
+                        "SDR": new_sdr,
+                        "Color": new_color,
+                        "Standard_Length": new_length,
+                        "Unit": new_unit
                     }).eq("Item_ID", selected_id).execute()
                     st.success("Item updated.")
                     refresh_all()
@@ -713,19 +749,23 @@ elif page == "Item Registration":
                     st.error("Update failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), ITEM_TABLE, "update")
-                    if hint: st.info(hint)
+                    if hint:
+                        st.info(hint)
 
             st.markdown("---")
             if st.button("Delete Item", type="secondary"):
                 try:
-                    supabase.table(ITEM_TABLE).delete().eq("Item_ID", selected_id).execute()
+                    supabase.table(ITEM_TABLE).delete().eq(
+                        "Item_ID", selected_id
+                    ).execute()
                     st.success("Item deleted.")
                     refresh_all()
                 except Exception as e:
                     st.error("Delete failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), ITEM_TABLE, "delete")
-                    if hint: st.info(hint)
+                    if hint:
+                        st.info(hint)
 
 
 # =========================================================
@@ -739,15 +779,19 @@ elif page == "Production":
     if production_err:
         st.error(f"Failed to load Production table: {production_err}")
         hint = rls_hint(production_err, PRODUCTION_TABLE, "select")
-        if hint: st.info(hint)
+        if hint:
+            st.info(hint)
 
     if production.empty and not production_err:
-        st.info("Production table is empty. Add the first record from the Add Production tab below.")
+        st.info(
+            "Production table is empty. Add the first record from the Add Production tab below."
+        )
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Production", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("Search Production", placeholder="Production ID, Item ID, Batch...")
+        search = st.text_input("Search Production",
+                               placeholder="Production ID, Item ID, Batch...")
         display = filter_df(production, search)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
@@ -764,16 +808,22 @@ elif page == "Production":
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     selected_item = st.selectbox("Item ID", options)
-                    production_date = st.date_input("Production Date", value=date.today())
+                    production_date = st.date_input("Production Date",
+                                                    value=date.today())
                     batch_no = st.text_input("Batch No")
                 with c2:
                     production_line = st.text_input("Production Line")
-                    planned_qty = st.number_input("Planned Quantity (m)", min_value=1, value=1, step=1)
-                    good_qty = st.number_input("Good Quantity (m)", min_value=0, value=0, step=1)
+                    planned_qty = st.number_input("Planned Quantity (m)",
+                                                  min_value=1, value=1, step=1)
+                    good_qty = st.number_input("Good Quantity (m)",
+                                               min_value=0, value=0, step=1)
                 with c3:
-                    rejected_qty = st.number_input("Rejected Quantity (m)", min_value=0, value=0, step=1)
-                    status = st.selectbox("Production Status",
-                                          ["Completed", "In Progress", "Pending", "Rejected"])
+                    rejected_qty = st.number_input("Rejected Quantity (m)",
+                                                   min_value=0, value=0, step=1)
+                    status = st.selectbox(
+                        "Production Status",
+                        ["Completed", "In Progress", "Pending", "Rejected"]
+                    )
                 submit = st.form_submit_button("Add Production", type="primary")
 
             if submit:
@@ -795,41 +845,121 @@ elif page == "Production":
                     st.error("Production add failed.")
                     st.code(str(e))
                     hint = rls_hint(str(e), PRODUCTION_TABLE, "insert")
-                    if hint: st.info(hint)
+                    if hint:
+                        st.info(hint)
 
     with tab3:
         if production.empty:
             st.info("No production records.")
         else:
-            selected_id = st.selectbox("Select Production ID",
-                                       production["Production_ID"].astype(str).tolist())
-            selected = production.loc[production["Production_ID"].astype(str) == selected_id].iloc[0]
+            selected_id = st.selectbox(
+                "Select Production ID",
+                production["Production_ID"].astype(str).tolist()
+            )
+            selected = production.loc[
+                production["Production_ID"].astype(str) == selected_id
+            ].iloc[0]
 
             with st.form("update_production_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    edit_batch = st.text_input("Batch No",
-                                               value=str(selected["Batch_No"]) if pd.notna(selected["Batch_No"]) else "")
-                    edit_line = st.text_input("Production Line",
-                                              value=str(selected["Production_Line"]) if pd.notna(selected["Production_Line"]) else "")
+                    edit_batch = st.text_input(
+                        "Batch No",
+                        value=str(selected["Batch_No"]) if pd.notna(selected["Batch_No"]) else ""
+                    )
+                    edit_line = st.text_input(
+                        "Production Line",
+                        value=str(selected["Production_Line"]) if pd.notna(selected["Production_Line"]) else ""
+                    )
                 with c2:
-                    edit_planned = st.number_input("Planned Quantity", min_value=1,
-                                                   value=max(1, int(selected["Planned_Qty_m"])), step=1)
-                    edit_good = st.number_input("Good Quantity", min_value=0,
-                                                value=max(0, int(selected["Good_Qty_m"])), step=1)
+                    edit_planned = st.number_input(
+                        "Planned Quantity", min_value=1,
+                        value=max(1, int(selected["Planned_Qty_m"])), step=1
+                    )
+                    edit_good = st.number_input(
+                        "Good Quantity", min_value=0,
+                        value=max(0, int(selected["Good_Qty_m"])), step=1
+                    )
                 with c3:
-                    edit_rejected = st.number_input("Rejected Quantity", min_value=0,
-                                                    value=max(0, int(selected["Rejected_Qty_m"])), step=1)
+                    edit_rejected = st.number_input(
+                        "Rejected Quantity", min_value=0,
+                        value=max(0, int(selected["Rejected_Qty_m"])), step=1
+                    )
                     status_options = ["Completed", "In Progress", "Pending", "Rejected"]
                     current_status = str(selected["Production_Status"])
                     edit_status = st.selectbox(
                         "Production Status", status_options,
-                        index=(status_options.index(current_status) if current_status in status_options else 0)
+                        index=(status_options.index(current_status)
+                               if current_status in status_options else 0)
                     )
                 update = st.form_submit_button("Update Production", type="primary")
 
             if update:
                 try:
                     supabase.table(PRODUCTION_TABLE).update({
-                        "Batch_No": edit_batch, "Production_Line": edit_line,
-                        "Planned_Qty_m": edit_planned, "Good
+                        "Batch_No": edit_batch,
+                        "Production_Line": edit_line,
+                        "Planned_Qty_m": edit_planned,
+                        "Good_Qty_m": edit_good,
+                        "Rejected_Qty_m": edit_rejected,
+                        "Production_Status": edit_status
+                    }).eq("Production_ID", selected_id).execute()
+                    st.success("Production updated.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Update failed.")
+                    st.code(str(e))
+                    hint = rls_hint(str(e), PRODUCTION_TABLE, "update")
+                    if hint:
+                        st.info(hint)
+
+            if st.button("Delete Production"):
+                try:
+                    supabase.table(PRODUCTION_TABLE).delete().eq(
+                        "Production_ID", selected_id
+                    ).execute()
+                    st.success("Production deleted.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Delete failed.")
+                    st.code(str(e))
+                    hint = rls_hint(str(e), PRODUCTION_TABLE, "delete")
+                    if hint:
+                        st.info(hint)
+
+
+# =========================================================
+# STOCK CONTROL
+# =========================================================
+
+elif page == "Stock Control":
+
+    st.title("Stock Control")
+    st.caption("Manage stock across Opening, Production, Dispatch, Return and Closing.")
+
+    data_banner()
+
+    stock_tabs = st.tabs([
+        "Opening Stock",
+        "Production Qty",
+        "Dispatch Qty",
+        "Return Qty",
+        "Closing Stock"
+    ])
+
+    with stock_tabs[0]:
+        crud_simple_table(
+            OPENING_TABLE, opening, "Opening_Stock_ID",
+            "Opening Stock", items, opening_err
+        )
+
+    with stock_tabs[1]:
+        crud_simple_table(
+            PRODUCTION_QTY_TABLE, prod_qty, "Production_ID",
+            "Production Qty", items, prod_qty_err
+        )
+
+    with stock_tabs[2]:
+        crud_simple_table(
+            DISPATCH_TABLE, dispatch, "Dispatch_ID",
+            "Dispatch Qty",
