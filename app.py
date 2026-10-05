@@ -16,6 +16,10 @@ st.set_page_config(
 )
 
 
+# =========================================================
+# CONSTANTS
+# =========================================================
+
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
 OPENING_TABLE = "Opening_Stock"
@@ -23,6 +27,7 @@ PRODUCTION_QTY_TABLE = "Production_Qty"
 DISPATCH_TABLE = "Dispatch_Qty"
 RETURN_TABLE = "Return_Qty"
 CLOSING_TABLE = "Closing_Stock"
+ADJUSTMENT_TABLE = "Stock_Adjustment"
 
 ITEM_COLUMNS = (
     "Item_ID", "Item_Code", "Material_Grade", "Application",
@@ -39,9 +44,29 @@ PRODUCTION_QTY_COLUMNS = ("Production_ID", "Item_ID", "Qty")
 DISPATCH_COLUMNS = ("Dispatch_ID", "Item_ID", "Qty")
 RETURN_COLUMNS = ("Return_ID", "Item_ID", "Qty")
 CLOSING_COLUMNS = ("Closing_Stock_ID", "Item_ID", "Qty")
+ADJUSTMENT_COLUMNS = (
+    "Adjustment_ID", "Item_ID", "Adjustment_Date",
+    "Qty", "Reason", "Remarks"
+)
+
+# ID prefixes per table
+ID_PREFIX = {
+    ITEM_TABLE:          ("Item_ID",          "ITM"),
+    PRODUCTION_TABLE:    ("Production_ID",    "PRD"),
+    OPENING_TABLE:       ("Opening_Stock_ID", "OPN"),
+    PRODUCTION_QTY_TABLE:("Production_ID",    "PQT"),
+    DISPATCH_TABLE:      ("Dispatch_ID",      "DSP"),
+    RETURN_TABLE:        ("Return_ID",        "RET"),
+    CLOSING_TABLE:       ("Closing_Stock_ID", "CLS"),
+    ADJUSTMENT_TABLE:    ("Adjustment_ID",    "ADJ"),
+}
 
 CACHE_TTL = 300
 
+
+# =========================================================
+# CSS
+# =========================================================
 
 @st.cache_data(show_spinner=False)
 def _read_css():
@@ -53,11 +78,15 @@ def _read_css():
 
 
 _css = _read_css()
-if _css is None:
-    st.warning("style.css not found. app.py and style.css must be in the same folder.")
-else:
+if _css:
     st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
+else:
+    st.warning("style.css not found.")
 
+
+# =========================================================
+# SUPABASE CLIENT
+# =========================================================
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client(url: str, key: str) -> Client:
@@ -69,7 +98,6 @@ try:
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 except Exception:
     st.error("Supabase secrets missing.")
-    st.info("Streamlit Cloud -> Settings -> Secrets: add SUPABASE_URL and SUPABASE_KEY.")
     st.stop()
 
 try:
@@ -80,23 +108,23 @@ except Exception as e:
     st.stop()
 
 
-def _normalize_columns(df: pd.DataFrame, expected: tuple) -> pd.DataFrame:
+# =========================================================
+# DATAFRAME HELPERS
+# =========================================================
+
+def _normalize_columns(df, expected):
     if df is None or df.empty:
         return df
     exp_set = set(expected)
-    df_cols = set(df.columns)
-    if exp_set.issubset(df_cols):
+    if exp_set.issubset(set(df.columns)):
         return df
     lower_map = {c.lower(): c for c in df.columns}
-    rename = {
-        lower_map[c.lower()]: c
-        for c in expected
-        if c not in df_cols and c.lower() in lower_map
-    }
+    rename = {lower_map[c.lower()]: c for c in expected
+              if c not in df.columns and c.lower() in lower_map}
     return df.rename(columns=rename) if rename else df
 
 
-def make_df(data, columns: tuple) -> pd.DataFrame:
+def make_df(data, columns):
     if not data:
         return pd.DataFrame(columns=list(columns))
     df = pd.DataFrame(data)
@@ -107,14 +135,18 @@ def make_df(data, columns: tuple) -> pd.DataFrame:
     return df[list(columns)]
 
 
-def convert_numeric(df: pd.DataFrame, columns) -> pd.DataFrame:
+def convert_numeric(df, columns):
     present = [c for c in columns if c in df.columns]
     if present:
         df[present] = df[present].apply(pd.to_numeric, errors="coerce").fillna(0)
     return df
 
 
-def _fetch_raw(table_name: str):
+# =========================================================
+# DATA LOADING
+# =========================================================
+
+def _fetch_raw(table_name):
     try:
         resp = supabase.table(table_name).select("*").execute()
         return resp.data or [], None
@@ -122,7 +154,7 @@ def _fetch_raw(table_name: str):
         return [], str(e)
 
 
-def _process(cols: tuple, num_cols: tuple, records, err):
+def _process(cols, num_cols, records, err):
     if err:
         return pd.DataFrame(columns=list(cols)), err
     df = make_df(records, cols)
@@ -142,6 +174,7 @@ def load_all_data():
         (DISPATCH_TABLE, DISPATCH_COLUMNS, ("Qty",)),
         (RETURN_TABLE, RETURN_COLUMNS, ("Qty",)),
         (CLOSING_TABLE, CLOSING_COLUMNS, ("Qty",)),
+        (ADJUSTMENT_TABLE, ADJUSTMENT_COLUMNS, ("Qty",)),
     ]
 
     with ThreadPoolExecutor(max_workers=len(specs)) as pool:
@@ -160,38 +193,124 @@ def load_all_data():
     dispatch, dispatch_err = results[4]
     return_qty, return_err = results[5]
     closing, closing_err = results[6]
+    adjustment, adjustment_err = results[7]
 
     return (
         items, production,
-        opening, prod_qty, dispatch, return_qty, closing,
+        opening, prod_qty, dispatch, return_qty, closing, adjustment,
         items_err, production_err,
-        opening_err, prod_qty_err, dispatch_err, return_err, closing_err
+        opening_err, prod_qty_err, dispatch_err, return_err,
+        closing_err, adjustment_err
     )
 
 
 (
     items, production,
-    opening, prod_qty, dispatch, return_qty, closing,
+    opening, prod_qty, dispatch, return_qty, closing, adjustment,
     items_err, production_err,
-    opening_err, prod_qty_err, dispatch_err, return_err, closing_err
+    opening_err, prod_qty_err, dispatch_err, return_err,
+    closing_err, adjustment_err
 ) = load_all_data()
 
 
+# =========================================================
+# AUTO-ID GENERATION
+# =========================================================
+
+def get_next_id(df: pd.DataFrame, id_col: str, prefix: str) -> str:
+    """Generate next ID like ITM-001, ITM-002 ...
+    Works with legacy numeric IDs too."""
+    if df.empty or id_col not in df.columns:
+        return f"{prefix}-001"
+
+    nums = []
+    for v in df[id_col].dropna().astype(str):
+        # Extract numeric part
+        if prefix and v.startswith(f"{prefix}-"):
+            tail = v[len(prefix) + 1:]
+        else:
+            tail = v
+        try:
+            nums.append(int(float(tail)))
+        except (ValueError, TypeError):
+            continue
+
+    if not nums:
+        return f"{prefix}-001"
+
+    return f"{prefix}-{max(nums) + 1:03d}"
+
+
+def next_id_for(table_name: str, df: pd.DataFrame) -> str:
+    id_col, prefix = ID_PREFIX[table_name]
+    return get_next_id(df, id_col, prefix)
+
+
+# =========================================================
+# AUTO-CLOSING STOCK COMPUTATION
+# =========================================================
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def get_item_options(items_df: pd.DataFrame) -> list:
+def compute_stock_ledger(
+    items_df, opening_df, prod_qty_df,
+    dispatch_df, return_df, adjustment_df
+) -> pd.DataFrame:
+    """
+    Item-wise stock ledger.
+    Formula: Closing = Opening + Produced - Dispatched + Returned + Adjusted
+    """
     if items_df.empty:
-        return []
-    return items_df["Item_ID"].astype(str).tolist()
+        return pd.DataFrame(columns=[
+            "Item_ID", "Item_Code", "Opening", "Produced",
+            "Dispatched", "Returned", "Adjusted", "Computed_Closing"
+        ])
+
+    def _grp(df, col_name):
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["Item_ID", col_name])
+        return (df.groupby("Item_ID", as_index=False)["Qty"]
+                  .sum()
+                  .rename(columns={"Qty": col_name}))
+
+    base = items_df[["Item_ID", "Item_Code"]].copy()
+
+    for df, name in [
+        (opening_df,   "Opening"),
+        (prod_qty_df,  "Produced"),
+        (dispatch_df,  "Dispatched"),
+        (return_df,    "Returned"),
+        (adjustment_df,"Adjusted"),
+    ]:
+        base = base.merge(_grp(df, name), on="Item_ID", how="left")
+
+    base = base.fillna(0)
+    base["Computed_Closing"] = (
+        base["Opening"]
+        + base["Produced"]
+        - base["Dispatched"]
+        + base["Returned"]
+        + base["Adjusted"]
+    )
+    return base
+
+
+STOCK_LEDGER = compute_stock_ledger(
+    items, opening, prod_qty, dispatch, return_qty, adjustment
+)
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def compute_totals(production, opening, prod_qty, dispatch, return_qty, closing) -> dict:
+def compute_totals(production, opening, prod_qty, dispatch,
+                   return_qty, adjustment, stock_ledger) -> dict:
     good = float(production["Good_Qty_m"].sum()) if not production.empty else 0.0
     rejected = float(production["Rejected_Qty_m"].sum()) if not production.empty else 0.0
     planned = float(production["Planned_Qty_m"].sum()) if not production.empty else 0.0
 
     total_output = good + rejected
     yield_pct = (good / total_output * 100) if total_output > 0 else 0.0
+
+    closing_total = (float(stock_ledger["Computed_Closing"].sum())
+                     if not stock_ledger.empty else 0.0)
 
     return {
         "planned": planned,
@@ -202,57 +321,65 @@ def compute_totals(production, opening, prod_qty, dispatch, return_qty, closing)
         "prod_qty": float(prod_qty["Qty"].sum()) if not prod_qty.empty else 0.0,
         "dispatched": float(dispatch["Qty"].sum()) if not dispatch.empty else 0.0,
         "returned": float(return_qty["Qty"].sum()) if not return_qty.empty else 0.0,
-        "closing": float(closing["Qty"].sum()) if not closing.empty else 0.0,
+        "adjusted": float(adjustment["Qty"].sum()) if not adjustment.empty else 0.0,
+        "closing": closing_total,
     }
 
 
-TOTALS = compute_totals(production, opening, prod_qty, dispatch, return_qty, closing)
+TOTALS = compute_totals(
+    production, opening, prod_qty, dispatch,
+    return_qty, adjustment, STOCK_LEDGER
+)
 
 
-def get_next_id(df: pd.DataFrame, column: str) -> str:
-    if df.empty or column not in df.columns:
-        return "1"
-    values = pd.to_numeric(df[column], errors="coerce").dropna()
-    if values.empty:
-        return "1"
-    return str(int(values.max()) + 1)
+# =========================================================
+# UI HELPERS
+# =========================================================
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def get_item_options(items_df: pd.DataFrame) -> list:
+    if items_df.empty:
+        return []
+    return items_df["Item_ID"].astype(str).tolist()
 
 
 def refresh_all():
     load_all_data.clear()
     get_item_options.clear()
+    compute_stock_ledger.clear()
     compute_totals.clear()
     st.rerun()
 
 
-def filter_df(df: pd.DataFrame, search: str) -> pd.DataFrame:
+def filter_df(df, search):
     if not search or df.empty:
         return df
-    search_lower = search.lower()
+    s = search.lower()
     mask = df.astype(str).apply(
-        lambda row: search_lower in " ".join(row.values).lower(),
-        axis=1
+        lambda row: s in " ".join(row.values).lower(), axis=1
     )
     return df[mask]
 
 
-def rls_hint(err: str, table: str, action: str = "insert"):
+def rls_hint(err, table, action="insert"):
     e = err.lower()
     if "row-level security" in e or "rls" in e or "policy" in e:
         return (f"Supabase -> Authentication -> Policies -> {table} -> "
                 f"New Policy -> allow {action.upper()} for anon and authenticated.")
     if "relation" in e and "does not exist" in e:
-        return f"Table {table} does not exist in Supabase. Create it first."
+        return f"Table {table} does not exist in Supabase."
     if "column" in e and "does not exist" in e:
-        return f"Column name mismatch on {table}. Postgres columns are case-sensitive."
+        return f"Column name mismatch on {table}."
     if "permission denied" in e:
-        return f"Permission denied on {table}. Check RLS policies."
+        return f"Permission denied on {table}."
     if "duplicate key" in e or "unique constraint" in e:
-        return f"Duplicate ID in {table}. Refresh and try again."
+        return f"Duplicate ID in {table}."
+    if "foreign key" in e or "violates foreign key" in e:
+        return f"Foreign key violation — Item_ID {table} mein maujood nahi."
     return None
 
 
-def empty_state(msg: str, cta: str = None):
+def empty_state(msg, cta=None):
     st.markdown(
         f"""
         <div style="padding: 28px; border-radius: 12px;
@@ -267,28 +394,44 @@ def empty_state(msg: str, cta: str = None):
     )
 
 
+def data_banner():
+    empty = []
+    if opening.empty and not opening_err: empty.append("Opening Stock")
+    if prod_qty.empty and not prod_qty_err: empty.append("Production Qty")
+    if dispatch.empty and not dispatch_err: empty.append("Dispatch Qty")
+    if return_qty.empty and not return_err: empty.append("Return Qty")
+    if adjustment.empty and not adjustment_err: empty.append("Stock Adjustment")
+
+    if empty:
+        st.warning(
+            f"The following table(s) have no records yet: **{', '.join(empty)}**.\n\n"
+            f"Open the Stock Control or Stock Adjustment module to add records."
+        )
+
+
+# =========================================================
+# GENERIC CRUD FOR SIMPLE STOCK TABLES
+# =========================================================
+
 def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
         st.error(f"Failed to load {label}: {load_error}")
-        hint = rls_hint(load_error, table_name, "select")
-        if hint:
-            st.info(hint)
+        h = rls_hint(load_error, table_name, "select")
+        if h: st.info(h)
     elif df.empty:
-        st.info(f"{label} table is empty. Add the first record from the Add {label} tab below.")
+        st.info(f"{label} table is empty. Add the first record below.")
 
     tab1, tab2, tab3 = st.tabs([f"View {label}", f"Add {label}", "Update / Delete"])
 
     with tab1:
-        search = st.text_input(
-            f"Search {label}", key=f"search_{table_name}",
-            placeholder=f"{id_col}, Item ID..."
-        )
+        search = st.text_input(f"Search {label}", key=f"s_{table_name}",
+                               placeholder=f"{id_col}, Item ID...")
         display = filter_df(df, search)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
-        next_id = get_next_id(df, id_col)
+        next_id = next_id_for(table_name, df)
         st.info(f"Next {id_col}: {next_id}")
 
         if items_df.empty:
@@ -299,74 +442,74 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
                 c1, c2 = st.columns(2)
                 with c1:
                     selected_item = st.selectbox("Item ID", options,
-                                                 key=f"add_item_{table_name}")
+                                                 key=f"ai_{table_name}")
                 with c2:
                     qty = st.number_input("Quantity", min_value=0.0, value=0.0,
-                                          step=1.0, key=f"add_qty_{table_name}")
+                                          step=1.0, key=f"aq_{table_name}")
                 submit = st.form_submit_button(f"Add {label}", type="primary")
 
             if submit:
                 try:
-                    supabase.table(table_name).insert(
-                        {id_col: next_id, "Item_ID": selected_item, "Qty": qty}
-                    ).execute()
+                    supabase.table(table_name).insert({
+                        id_col: next_id,
+                        "Item_ID": selected_item,
+                        "Qty": qty
+                    }).execute()
                     st.success(f"{label} {next_id} added.")
                     refresh_all()
                 except Exception as e:
                     st.error(f"{label} add failed.")
                     st.code(str(e))
-                    hint = rls_hint(str(e), table_name, "insert")
-                    if hint:
-                        st.info(hint)
+                    h = rls_hint(str(e), table_name, "insert")
+                    if h: st.info(h)
 
     with tab3:
         if df.empty:
             st.info(f"No {label} records.")
             return
 
-        selected_id = st.selectbox(
-            f"Select {id_col}",
-            df[id_col].astype(str).tolist(),
-            key=f"sel_{table_name}"
-        )
+        selected_id = st.selectbox(f"Select {id_col}",
+                                   df[id_col].astype(str).tolist(),
+                                   key=f"sel_{table_name}")
         selected = df.loc[df[id_col].astype(str) == selected_id].iloc[0]
 
         options = get_item_options(items_df)
         current_item = str(selected["Item_ID"]) if pd.notna(selected["Item_ID"]) else ""
         default_idx = options.index(current_item) if current_item in options else 0
 
-        with st.form(f"update_{table_name}_form"):
+        with st.form(f"upd_{table_name}_form"):
             c1, c2 = st.columns(2)
             with c1:
                 if options:
-                    edit_item = st.selectbox("Item ID", options, index=default_idx,
-                                             key=f"edit_item_{table_name}")
+                    edit_item = st.selectbox("Item ID", options,
+                                             index=default_idx,
+                                             key=f"ei_{table_name}")
                 else:
                     edit_item = current_item
             with c2:
                 edit_qty = st.number_input(
                     "Quantity", min_value=0.0,
                     value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
-                    step=1.0, key=f"edit_qty_{table_name}"
+                    step=1.0, key=f"eq_{table_name}"
                 )
             update = st.form_submit_button("Update", type="primary")
 
         if update:
             try:
-                supabase.table(table_name).update(
-                    {"Item_ID": edit_item, "Qty": edit_qty}
-                ).eq(id_col, selected_id).execute()
+                supabase.table(table_name).update({
+                    "Item_ID": edit_item, "Qty": edit_qty
+                }).eq(id_col, selected_id).execute()
                 st.success(f"{label} updated.")
                 refresh_all()
             except Exception as e:
                 st.error("Update failed.")
                 st.code(str(e))
-                hint = rls_hint(str(e), table_name, "update")
-                if hint:
-                    st.info(hint)
+                h = rls_hint(str(e), table_name, "update")
+                if h: st.info(h)
 
         st.markdown("---")
-        if st.button(f"Delete {label}", type="secondary", key=f"del_{table_name}"):
+        if st.button(f"Delete {label}", type="secondary",
+                     key=f"del_{table_name}"):
             try:
                 supabase.table(table_name).delete().eq(id_col, selected_id).execute()
                 st.success(f"{label} deleted.")
@@ -374,10 +517,13 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
             except Exception as e:
                 st.error("Delete failed.")
                 st.code(str(e))
-                hint = rls_hint(str(e), table_name, "delete")
-                if hint:
-                    st.info(hint)
-        
+                h = rls_hint(str(e), table_name, "delete")
+                if h: st.info(h)
+
+
+# =========================================================
+# SIDEBAR
+# =========================================================
 
 with st.sidebar:
     if os.path.exists("logo.png"):
@@ -408,6 +554,8 @@ with st.sidebar:
             "Item Registration",
             "Production",
             "Stock Control",
+            "Stock Adjustment",
+            "Physical Check",
             "Analytics",
             "Custom Charts",
             "Data Management"
@@ -415,7 +563,6 @@ with st.sidebar:
     )
 
     st.markdown("---")
-
     if st.button("Refresh Data", use_container_width=True):
         refresh_all()
 
@@ -426,25 +573,9 @@ st.markdown(
 )
 
 
-def data_banner():
-    empty = []
-    if opening.empty and not opening_err:
-        empty.append("Opening Stock")
-    if prod_qty.empty and not prod_qty_err:
-        empty.append("Production Qty")
-    if dispatch.empty and not dispatch_err:
-        empty.append("Dispatch Qty")
-    if return_qty.empty and not return_err:
-        empty.append("Return Qty")
-    if closing.empty and not closing_err:
-        empty.append("Closing Stock")
-
-    if empty:
-        st.warning(
-            f"The following stock table(s) have no records yet: **{', '.join(empty)}**.\n\n"
-            f"Open the Stock Control module from the sidebar and use the tabs to add records."
-        )
-
+# =========================================================
+# EXECUTIVE DASHBOARD
+# =========================================================
 
 if page == "Executive Dashboard":
 
@@ -477,9 +608,9 @@ if page == "Executive Dashboard":
     with c3:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-label">Closing Stock</div>
+                <div class="metric-label">Current Closing Stock</div>
                 <div class="metric-value">{t['closing']:,.0f}</div>
-                <div class="metric-caption">From Closing_Stock table</div>
+                <div class="metric-caption">Auto-computed from ledger</div>
             </div>
         """, unsafe_allow_html=True)
 
@@ -499,7 +630,7 @@ if page == "Executive Dashboard":
     c2.metric("Produced Qty", f"{t['prod_qty']:,.0f}")
     c3.metric("Dispatched Qty", f"{t['dispatched']:,.0f}")
     c4.metric("Return Qty", f"{t['returned']:,.0f}")
-    c5.metric("Closing Stock", f"{t['closing']:,.0f}")
+    c5.metric("Adjusted", f"{t['adjusted']:,.0f}")
 
     st.markdown("---")
 
@@ -519,8 +650,7 @@ if page == "Executive Dashboard":
                          values="Count", hole=0.5)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            empty_state("No production records found.",
-                        "Open the Production module from the sidebar to add records.")
+            empty_state("No production records found.")
 
     with right:
         st.subheader("Production Overview")
@@ -538,9 +668,8 @@ if page == "Executive Dashboard":
             empty_state("No production records found.")
 
     st.subheader("Stock Flow Overview")
-    flow_total = (t["opening"] + t["prod_qty"] + t["dispatched"]
-                  + t["returned"] + t["closing"])
-    if flow_total > 0:
+    flow_total = t["opening"] + t["prod_qty"] + t["dispatched"] + t["returned"]
+    if flow_total > 0 or t["closing"] > 0:
         flow_data = pd.DataFrame({
             "Stage": ["Opening", "Produced", "Dispatched", "Returned", "Closing"],
             "Qty": [t["opening"], t["prod_qty"], t["dispatched"],
@@ -549,12 +678,18 @@ if page == "Executive Dashboard":
         fig = px.bar(flow_data, x="Stage", y="Qty", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        empty_state(
-            "No stock records found yet.",
-            "Open the Stock Control module to add Opening / Production / "
-            "Dispatch / Return / Closing records."
-        )
+        empty_state("No stock records found yet.")
 
+    st.subheader("Auto-Computed Stock Ledger")
+    if not STOCK_LEDGER.empty:
+        st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
+    else:
+        empty_state("No ledger data available.")
+
+
+# =========================================================
+# ITEM REGISTRATION
+# =========================================================
 
 elif page == "Item Registration":
 
@@ -562,9 +697,8 @@ elif page == "Item Registration":
 
     if items_err:
         st.error(f"Failed to load Item table: {items_err}")
-        hint = rls_hint(items_err, ITEM_TABLE, "select")
-        if hint:
-            st.info(hint)
+        h = rls_hint(items_err, ITEM_TABLE, "select")
+        if h: st.info(h)
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Item", "Update / Delete"])
 
@@ -576,7 +710,7 @@ elif page == "Item Registration":
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
-        next_item_id = get_next_id(items, "Item_ID")
+        next_item_id = next_id_for(ITEM_TABLE, items)
         st.info(f"Next Item ID: {next_item_id}")
 
         with st.form("add_item_form"):
@@ -617,9 +751,8 @@ elif page == "Item Registration":
             except Exception as e:
                 st.error("Item add failed.")
                 st.code(str(e))
-                hint = rls_hint(str(e), ITEM_TABLE, "insert")
-                if hint:
-                    st.info(hint)
+                h = rls_hint(str(e), ITEM_TABLE, "insert")
+                if h: st.info(h)
 
     with tab3:
         if items.empty:
@@ -692,9 +825,8 @@ elif page == "Item Registration":
                 except Exception as e:
                     st.error("Update failed.")
                     st.code(str(e))
-                    hint = rls_hint(str(e), ITEM_TABLE, "update")
-                    if hint:
-                        st.info(hint)
+                    h = rls_hint(str(e), ITEM_TABLE, "update")
+                    if h: st.info(h)
 
             st.markdown("---")
             if st.button("Delete Item", type="secondary"):
@@ -707,10 +839,13 @@ elif page == "Item Registration":
                 except Exception as e:
                     st.error("Delete failed.")
                     st.code(str(e))
-                    hint = rls_hint(str(e), ITEM_TABLE, "delete")
-                    if hint:
-                        st.info(hint)
+                    h = rls_hint(str(e), ITEM_TABLE, "delete")
+                    if h: st.info(h)
 
+
+# =========================================================
+# PRODUCTION
+# =========================================================
 
 elif page == "Production":
 
@@ -718,14 +853,11 @@ elif page == "Production":
 
     if production_err:
         st.error(f"Failed to load Production table: {production_err}")
-        hint = rls_hint(production_err, PRODUCTION_TABLE, "select")
-        if hint:
-            st.info(hint)
+        h = rls_hint(production_err, PRODUCTION_TABLE, "select")
+        if h: st.info(h)
 
     if production.empty and not production_err:
-        st.info(
-            "Production table is empty. Add the first record from the Add Production tab below."
-        )
+        st.info("Production table is empty. Add the first record below.")
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Production", "Update / Delete"])
 
@@ -737,7 +869,7 @@ elif page == "Production":
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
-        next_production_id = get_next_id(production, "Production_ID")
+        next_production_id = next_id_for(PRODUCTION_TABLE, production)
         st.info(f"Next Production ID: {next_production_id}")
 
         if items.empty:
@@ -784,9 +916,8 @@ elif page == "Production":
                 except Exception as e:
                     st.error("Production add failed.")
                     st.code(str(e))
-                    hint = rls_hint(str(e), PRODUCTION_TABLE, "insert")
-                    if hint:
-                        st.info(hint)
+                    h = rls_hint(str(e), PRODUCTION_TABLE, "insert")
+                    if h: st.info(h)
 
     with tab3:
         if production.empty:
@@ -849,9 +980,8 @@ elif page == "Production":
                 except Exception as e:
                     st.error("Update failed.")
                     st.code(str(e))
-                    hint = rls_hint(str(e), PRODUCTION_TABLE, "update")
-                    if hint:
-                        st.info(hint)
+                    h = rls_hint(str(e), PRODUCTION_TABLE, "update")
+                    if h: st.info(h)
 
             if st.button("Delete Production"):
                 try:
@@ -863,15 +993,18 @@ elif page == "Production":
                 except Exception as e:
                     st.error("Delete failed.")
                     st.code(str(e))
-                    hint = rls_hint(str(e), PRODUCTION_TABLE, "delete")
-                    if hint:
-                        st.info(hint)
+                    h = rls_hint(str(e), PRODUCTION_TABLE, "delete")
+                    if h: st.info(h)
 
+
+# =========================================================
+# STOCK CONTROL
+# =========================================================
 
 elif page == "Stock Control":
 
     st.title("Stock Control")
-    st.caption("Manage stock across Opening, Production, Dispatch, Return and Closing.")
+    st.caption("Opening, Production, Dispatch, Return, and auto-computed Closing stock.")
 
     data_banner()
 
@@ -880,7 +1013,7 @@ elif page == "Stock Control":
         "Production Qty",
         "Dispatch Qty",
         "Return Qty",
-        "Closing Stock"
+        "Closing Stock (Auto)"
     ])
 
     with stock_tabs[0]:
@@ -908,11 +1041,303 @@ elif page == "Stock Control":
         )
 
     with stock_tabs[4]:
-        crud_simple_table(
-            CLOSING_TABLE, closing, "Closing_Stock_ID",
-            "Closing Stock", items, closing_err
+        st.markdown("### Auto-Computed Closing Stock")
+        st.caption(
+            "Closing = Opening + Produced − Dispatched + Returned + Adjusted. "
+            "Ye values har entry pe automatically recalculate hoti hain."
+        )
+        if not STOCK_LEDGER.empty:
+            st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
+        else:
+            empty_state("No stock data available yet.")
+
+
+# =========================================================
+# STOCK ADJUSTMENT
+# =========================================================
+
+elif page == "Stock Adjustment":
+
+    st.title("Stock Adjustment")
+    st.caption("Record stock corrections: damage, loss, found, physical-check discrepancies.")
+
+    if adjustment_err:
+        st.error(f"Failed to load Stock_Adjustment table: {adjustment_err}")
+        h = rls_hint(adjustment_err, ADJUSTMENT_TABLE, "select")
+        if h: st.info(h)
+
+    if adjustment.empty and not adjustment_err:
+        st.info("Stock_Adjustment table is empty. Add the first record below.")
+
+    tab1, tab2, tab3 = st.tabs(["View Records", "Add Adjustment", "Update / Delete"])
+
+    reasons = ["Physical Check", "Damage", "Loss", "Found", "Other"]
+
+    # ---- VIEW ----
+    with tab1:
+        search = st.text_input("Search Adjustment",
+                               placeholder="Adjustment ID, Item ID, Reason...")
+        display = filter_df(adjustment, search)
+        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.caption(f"{len(display)} record(s)")
+
+    # ---- ADD ----
+    with tab2:
+        next_adj_id = next_id_for(ADJUSTMENT_TABLE, adjustment)
+        st.info(f"Next Adjustment ID: {next_adj_id}")
+
+        if items.empty:
+            st.warning("Add an item in Item Registration first.")
+        else:
+            options = get_item_options(items)
+            with st.form("add_adjustment_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    selected_item = st.selectbox("Item ID", options)
+                    adj_date = st.date_input("Adjustment Date", value=date.today())
+                with c2:
+                    qty = st.number_input(
+                        "Quantity (+ve to add, -ve to subtract)",
+                        value=0.0, step=1.0
+                    )
+                    reason = st.selectbox("Reason", reasons)
+                with c3:
+                    remarks = st.text_area("Remarks", height=100)
+
+                submit = st.form_submit_button("Add Adjustment", type="primary")
+
+            if submit:
+                try:
+                    supabase.table(ADJUSTMENT_TABLE).insert({
+                        "Adjustment_ID": next_adj_id,
+                        "Item_ID": selected_item,
+                        "Adjustment_Date": str(adj_date),
+                        "Qty": qty,
+                        "Reason": reason,
+                        "Remarks": remarks.strip()
+                    }).execute()
+                    st.success(f"Adjustment {next_adj_id} added.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Adjustment add failed.")
+                    st.code(str(e))
+                    h = rls_hint(str(e), ADJUSTMENT_TABLE, "insert")
+                    if h: st.info(h)
+
+    # ---- UPDATE / DELETE ----
+    with tab3:
+        if adjustment.empty:
+            st.info("No adjustment records.")
+        else:
+            selected_id = st.selectbox(
+                "Select Adjustment ID",
+                adjustment["Adjustment_ID"].astype(str).tolist()
+            )
+            selected = adjustment.loc[
+                adjustment["Adjustment_ID"].astype(str) == selected_id
+            ].iloc[0]
+
+            options = get_item_options(items)
+            current_item = str(selected["Item_ID"]) if pd.notna(selected["Item_ID"]) else ""
+            default_idx = options.index(current_item) if current_item in options else 0
+            current_reason = str(selected["Reason"]) if pd.notna(selected["Reason"]) else "Other"
+            reason_idx = reasons.index(current_reason) if current_reason in reasons else 4
+
+            with st.form("update_adjustment_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    edit_item = (st.selectbox("Item ID", options, index=default_idx)
+                                 if options else current_item)
+                    edit_date = st.date_input(
+                        "Adjustment Date",
+                        value=pd.to_datetime(
+                            selected["Adjustment_Date"]
+                        ).date() if pd.notna(selected["Adjustment_Date"]) else date.today()
+                    )
+                with c2:
+                    edit_qty = st.number_input(
+                        "Quantity", value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
+                        step=1.0
+                    )
+                    edit_reason = st.selectbox("Reason", reasons, index=reason_idx)
+                with c3:
+                    edit_remarks = st.text_area(
+                        "Remarks",
+                        value=str(selected["Remarks"]) if pd.notna(selected["Remarks"]) else "",
+                        height=100
+                    )
+                update = st.form_submit_button("Update Adjustment", type="primary")
+
+            if update:
+                try:
+                    supabase.table(ADJUSTMENT_TABLE).update({
+                        "Item_ID": edit_item,
+                        "Adjustment_Date": str(edit_date),
+                        "Qty": edit_qty,
+                        "Reason": edit_reason,
+                        "Remarks": edit_remarks.strip()
+                    }).eq("Adjustment_ID", selected_id).execute()
+                    st.success("Adjustment updated.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Update failed.")
+                    st.code(str(e))
+                    h = rls_hint(str(e), ADJUSTMENT_TABLE, "update")
+                    if h: st.info(h)
+
+            st.markdown("---")
+            if st.button("Delete Adjustment", type="secondary"):
+                try:
+                    supabase.table(ADJUSTMENT_TABLE).delete().eq(
+                        "Adjustment_ID", selected_id
+                    ).execute()
+                    st.success("Adjustment deleted.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Delete failed.")
+                    st.code(str(e))
+                    h = rls_hint(str(e), ADJUSTMENT_TABLE, "delete")
+                    if h: st.info(h)
+
+    st.markdown("---")
+    st.subheader("Item-wise Adjustment Summary")
+    if not adjustment.empty:
+        summary = (adjustment.groupby("Item_ID", as_index=False)["Qty"]
+                   .sum().rename(columns={"Qty": "Net_Adjustment"}))
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+    else:
+        empty_state("No adjustments yet.")
+
+
+# =========================================================
+# PHYSICAL CHECK
+# =========================================================
+
+elif page == "Physical Check":
+
+    st.title("Physical Check")
+    st.caption(
+        "Compare system closing stock with physical count. "
+        "Differences automatically create Stock_Adjustment entries."
+    )
+
+    if STOCK_LEDGER.empty:
+        empty_state("No stock data available yet.")
+        st.stop()
+
+    ledger = STOCK_LEDGER.copy()
+    ledger = ledger.rename(columns={
+        "Opening": "System_Opening",
+        "Produced": "System_Produced",
+        "Dispatched": "System_Dispatched",
+        "Returned": "System_Returned",
+        "Adjusted": "System_Adjusted",
+        "Computed_Closing": "System_Closing",
+    })
+
+    st.subheader("Enter Physical Counts")
+
+    # Build a form with input per item
+    with st.form("physical_check_form"):
+        counts = {}
+        for _, row in ledger.iterrows():
+            item_id = row["Item_ID"]
+            item_code = row["Item_Code"] if pd.notna(row["Item_Code"]) else ""
+            system_closing = float(row["System_Closing"])
+
+            c1, c2, c3 = st.columns([2, 2, 3])
+            with c1:
+                st.markdown(f"**{item_id}**")
+                st.caption(item_code)
+            with c2:
+                st.metric("System Closing", f"{system_closing:,.0f}")
+            with c3:
+                counts[item_id] = st.number_input(
+                    "Physical Count",
+                    min_value=0.0,
+                    value=system_closing,
+                    step=1.0,
+                    key=f"physical_{item_id}"
+                )
+            st.markdown("---")
+
+        submit = st.form_submit_button(
+            "Save All Differences as Adjustments",
+            type="primary"
         )
 
+    if submit:
+        today = date.today()
+        inserted = 0
+        skipped = 0
+        errors = []
+
+        # Reload adjustment to get next ID
+        try:
+            adj_resp = supabase.table(ADJUSTMENT_TABLE).select("*").execute()
+            current_adj_df = make_df(adj_resp.data or [], ADJUSTMENT_COLUMNS)
+        except Exception:
+            current_adj_df = adjustment.copy()
+
+        for _, row in ledger.iterrows():
+            item_id = row["Item_ID"]
+            system_closing = float(row["System_Closing"])
+            physical = float(counts.get(item_id, system_closing))
+            diff = physical - system_closing
+
+            if abs(diff) < 0.0001:
+                skipped += 1
+                continue
+
+            new_id = next_id_for(ADJUSTMENT_TABLE, current_adj_df)
+            payload = {
+                "Adjustment_ID": new_id,
+                "Item_ID": item_id,
+                "Adjustment_Date": str(today),
+                "Qty": diff,
+                "Reason": "Physical Check",
+                "Remarks": f"System {system_closing:.0f} vs Physical {physical:.0f}"
+            }
+
+            try:
+                supabase.table(ADJUSTMENT_TABLE).insert(payload).execute()
+                # Append to local DF so next ID generation stays correct
+                current_adj_df = pd.concat(
+                    [current_adj_df, pd.DataFrame([payload])],
+                    ignore_index=True
+                )
+                inserted += 1
+            except Exception as e:
+                errors.append(f"{item_id}: {e}")
+
+        if inserted:
+            st.success(f"{inserted} adjustment(s) created.")
+        if skipped:
+            st.info(f"{skipped} item(s) matched — no adjustment needed.")
+        if errors:
+            st.error("Some entries failed:")
+            for e in errors:
+                st.code(e)
+
+        if inserted or skipped:
+            st.balloons()
+            refresh_all()
+
+    st.markdown("---")
+    st.subheader("Latest Physical Check Adjustments")
+    if not adjustment.empty:
+        pc = adjustment[adjustment["Reason"].astype(str) == "Physical Check"]
+        if not pc.empty:
+            st.dataframe(pc.tail(20), use_container_width=True, hide_index=True)
+        else:
+            st.info("No physical-check adjustments yet.")
+    else:
+        st.info("No adjustment records yet.")
+
+
+# =========================================================
+# ANALYTICS
+# =========================================================
 
 elif page == "Analytics":
 
@@ -935,48 +1360,31 @@ elif page == "Analytics":
         fig = px.bar(analysis, x="Type", y="Quantity", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        empty_state("No production data available.",
-                    "Open the Production module from the sidebar to add records.")
+        empty_state("No production data available.")
 
     st.markdown("---")
 
-    st.subheader("Stock Summary by Item")
+    st.subheader("Stock Ledger")
+    if not STOCK_LEDGER.empty:
+        st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
 
-    stock_frames = [
-        (opening, "Opening_Stock"),
-        (prod_qty, "Production_Qty"),
-        (dispatch, "Dispatch_Qty"),
-        (return_qty, "Return_Qty"),
-        (closing, "Closing_Stock"),
-    ]
-
-    stock_summary = None
-    for frame, col_name in stock_frames:
-        if not frame.empty:
-            grouped = frame.groupby("Item_ID", as_index=False)["Qty"].sum()
-            grouped = grouped.rename(columns={"Qty": col_name})
-            stock_summary = grouped if stock_summary is None else stock_summary.merge(
-                grouped, on="Item_ID", how="outer"
-            )
-
-    if stock_summary is not None and not stock_summary.empty:
-        stock_summary = stock_summary.fillna(0)
-        st.dataframe(stock_summary, use_container_width=True, hide_index=True)
-
-        value_cols = [c for c in stock_summary.columns if c != "Item_ID"]
-        fig = px.bar(stock_summary, x="Item_ID", y=value_cols, barmode="group")
+        chart_cols = ["Opening", "Produced", "Dispatched",
+                      "Returned", "Adjusted", "Computed_Closing"]
+        fig = px.bar(STOCK_LEDGER, x="Item_ID",
+                     y=chart_cols, barmode="group")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        empty_state("No stock data available.",
-                    "Open the Stock Control module from the sidebar to add records.")
+        empty_state("No stock data available.")
 
+
+# =========================================================
+# CUSTOM CHARTS
+# =========================================================
 
 elif page == "Custom Charts":
 
     st.title("Custom Charts")
-    st.caption("Build your own charts — choose data source, chart type, axes and aggregation.")
-
-    st.markdown("### 1. Data Source")
+    st.caption("Build your own charts — pick data source, chart type, axes.")
 
     source_options = {
         "Production": production,
@@ -985,24 +1393,16 @@ elif page == "Custom Charts":
         "Production Qty": prod_qty,
         "Dispatch Qty": dispatch,
         "Return Qty": return_qty,
-        "Closing Stock": closing,
+        "Stock Adjustment": adjustment,
+        "Stock Ledger (computed)": STOCK_LEDGER,
     }
 
-    source_name = st.selectbox(
-        "Select a dataset",
-        list(source_options.keys())
-    )
-
+    source_name = st.selectbox("Select a dataset", list(source_options.keys()))
     df = source_options[source_name].copy()
 
     if df.empty:
-        empty_state(
-            f"{source_name} has no records.",
-            "Add records in that module first, then come back here."
-        )
+        empty_state(f"{source_name} has no records.")
         st.stop()
-
-    st.markdown("### 2. Filters (optional)")
 
     with st.expander("Apply filters", expanded=False):
         filter_cols = st.multiselect(
@@ -1011,98 +1411,66 @@ elif page == "Custom Charts":
                      if df[c].dtype == "object" or df[c].nunique() < 30],
             default=[]
         )
-
         filtered_df = df.copy()
-
         for col in filter_cols:
             unique_vals = df[col].dropna().astype(str).unique().tolist()
             if not unique_vals:
                 continue
             picked = st.multiselect(f"Values for {col}", unique_vals,
-                                    default=unique_vals, key=f"filter_{col}")
+                                    default=unique_vals, key=f"f_{col}")
             filtered_df = filtered_df[filtered_df[col].astype(str).isin(picked)]
-
-    df = filtered_df
+        df = filtered_df
 
     if df.empty:
-        st.warning("No data left after filters. Change the filters.")
+        st.warning("No data left after filters.")
         st.stop()
 
-    st.markdown("### 3. Chart Configuration")
-
-    numeric_cols = [c for c in df.columns
-                    if pd.api.types.is_numeric_dtype(df[c])]
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     all_cols = df.columns.tolist()
 
     chart_type = st.selectbox(
         "Chart Type",
-        [
-            "Bar Chart",
-            "Grouped Bar Chart",
-            "Stacked Bar Chart",
-            "Line Chart",
-            "Area Chart",
-            "Pie Chart",
-            "Donut Chart",
-            "Scatter Plot",
-            "Histogram",
-            "Box Plot",
-        ]
+        ["Bar Chart", "Grouped Bar Chart", "Stacked Bar Chart",
+         "Line Chart", "Area Chart", "Pie Chart", "Donut Chart",
+         "Scatter Plot", "Histogram", "Box Plot"]
     )
 
     c1, c2, c3 = st.columns(3)
-
     with c1:
-        x_axis = st.selectbox("X-axis (category / group)", all_cols,
+        x_axis = st.selectbox("X-axis", all_cols,
                               index=(all_cols.index("Item_ID")
                                      if "Item_ID" in all_cols else 0))
-
     with c2:
-        y_axis = st.selectbox("Y-axis (numeric)",
-                              numeric_cols if numeric_cols else ["(no numeric column)"])
-
+        y_axis = st.selectbox("Y-axis",
+                              numeric_cols if numeric_cols else ["(no numeric)"])
     with c3:
-        color_by = st.selectbox(
-            "Color / Group by (optional)",
-            ["(none)"] + all_cols,
-            index=0
-        )
+        color_by = st.selectbox("Color / Group by", ["(none)"] + all_cols)
 
     agg_choice = "None"
     if chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
         agg_choice = st.selectbox(
-            "Aggregation (when X has multiple rows)",
-            ["sum", "mean", "count", "max", "min"],
-            index=0
+            "Aggregation",
+            ["sum", "mean", "count", "max", "min"]
         )
 
-    top_n = st.slider("Show top N categories (0 = all)", 0, 50, 0)
-
+    top_n = st.slider("Top N (0 = all)", 0, 50, 0)
     sort_order = st.radio("Sort order", ["Descending", "Ascending", "None"],
                           horizontal=True)
 
-    st.markdown("### 4. Chart")
-
     plot_df = df.copy()
-
     try:
         if agg_choice != "None" and chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
             group_cols = [x_axis]
             if color_by != "(none)" and color_by != x_axis:
                 group_cols.append(color_by)
-
             if agg_choice == "count":
-                plot_df = (
-                    plot_df.groupby(group_cols)[y_axis]
-                    .count().reset_index()
-                    .rename(columns={y_axis: "count"})
-                )
+                plot_df = (plot_df.groupby(group_cols)[y_axis]
+                           .count().reset_index()
+                           .rename(columns={y_axis: "count"}))
                 y_plot = "count"
             else:
-                plot_df = (
-                    plot_df.groupby(group_cols)[y_axis]
-                    .agg(agg_choice).reset_index()
-                )
+                plot_df = (plot_df.groupby(group_cols)[y_axis]
+                           .agg(agg_choice).reset_index())
                 y_plot = y_axis
         else:
             y_plot = y_axis
@@ -1111,95 +1479,65 @@ elif page == "Custom Charts":
             plot_df = plot_df.sort_values(
                 y_plot, ascending=(sort_order == "Ascending")
             )
-
         if top_n > 0 and y_plot in plot_df.columns:
             plot_df = plot_df.head(top_n)
 
+        color_arg = color_by if color_by != "(none)" else None
+
         if chart_type == "Bar Chart":
-            fig = px.bar(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None),
-                         text_auto=True)
-
+            fig = px.bar(plot_df, x=x_axis, y=y_plot, color=color_arg, text_auto=True)
         elif chart_type == "Grouped Bar Chart":
-            fig = px.bar(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None),
-                         barmode="group")
-
+            fig = px.bar(plot_df, x=x_axis, y=y_plot, color=color_arg, barmode="group")
         elif chart_type == "Stacked Bar Chart":
-            fig = px.bar(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None),
-                         barmode="stack")
-
+            fig = px.bar(plot_df, x=x_axis, y=y_plot, color=color_arg, barmode="stack")
         elif chart_type == "Line Chart":
-            fig = px.line(plot_df, x=x_axis, y=y_plot,
-                          color=(color_by if color_by != "(none)" else None),
-                          markers=True)
-
+            fig = px.line(plot_df, x=x_axis, y=y_plot, color=color_arg, markers=True)
         elif chart_type == "Area Chart":
-            fig = px.area(plot_df, x=x_axis, y=y_plot,
-                          color=(color_by if color_by != "(none)" else None))
-
+            fig = px.area(plot_df, x=x_axis, y=y_plot, color=color_arg)
         elif chart_type == "Pie Chart":
             fig = px.pie(plot_df, names=x_axis, values=y_plot)
-
         elif chart_type == "Donut Chart":
             fig = px.pie(plot_df, names=x_axis, values=y_plot, hole=0.5)
-
         elif chart_type == "Scatter Plot":
-            fig = px.scatter(plot_df, x=x_axis, y=y_plot,
-                             color=(color_by if color_by != "(none)" else None))
-
+            fig = px.scatter(plot_df, x=x_axis, y=y_plot, color=color_arg)
         elif chart_type == "Histogram":
-            fig = px.histogram(plot_df, x=x_axis,
-                               color=(color_by if color_by != "(none)" else None))
-
+            fig = px.histogram(plot_df, x=x_axis, color=color_arg)
         elif chart_type == "Box Plot":
-            fig = px.box(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None))
+            fig = px.box(plot_df, x=x_axis, y=y_plot, color=color_arg)
         else:
             fig = None
 
         if fig is not None:
-            fig.update_layout(
-                margin=dict(l=10, r=10, t=40, b=10),
-                height=520,
-                legend_title_text=(color_by if color_by != "(none)" else "")
-            )
+            fig.update_layout(margin=dict(l=10, r=10, t=40, b=10), height=520)
             st.plotly_chart(fig, use_container_width=True)
 
-        with st.expander("View underlying chart data"):
+        with st.expander("View underlying data"):
             st.dataframe(plot_df, use_container_width=True, hide_index=True)
-            st.caption(f"{len(plot_df)} row(s)")
 
         csv = plot_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download chart data as CSV",
-            data=csv,
-            file_name=f"custom_chart_{source_name.lower().replace(' ', '_')}.csv",
-            mime="text/csv"
-        )
+        st.download_button("Download CSV", csv,
+                           file_name=f"chart_{source_name.lower().replace(' ', '_')}.csv",
+                           mime="text/csv")
 
     except Exception as e:
-        st.error("Error while building the chart.")
+        st.error("Chart build error.")
         st.code(str(e))
-        st.info("Try a different X / Y combination, or clear Color / Group by.")
 
+
+# =========================================================
+# DATA MANAGEMENT
+# =========================================================
 
 elif page == "Data Management":
 
     st.title("Data Management")
     st.caption("Live database records and diagnostics.")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Items", len(items))
     c2.metric("Production", len(production))
-    c3.metric("Opening", len(opening))
-    c4.metric("Dispatch", len(dispatch))
-    c5.metric("Closing", len(closing))
-
-    c1, c2 = st.columns(2)
-    c1.metric("Production Qty", len(prod_qty))
-    c2.metric("Return Qty", len(return_qty))
+    c3.metric("Adjustments", len(adjustment))
+    c4.metric("Stock Ledger Rows", len(STOCK_LEDGER))
 
     st.markdown("---")
 
@@ -1208,12 +1546,14 @@ elif page == "Data Management":
             "Table": [
                 ITEM_TABLE, PRODUCTION_TABLE,
                 OPENING_TABLE, PRODUCTION_QTY_TABLE,
-                DISPATCH_TABLE, RETURN_TABLE, CLOSING_TABLE
+                DISPATCH_TABLE, RETURN_TABLE,
+                CLOSING_TABLE, ADJUSTMENT_TABLE
             ],
             "Rows Loaded": [
                 len(items), len(production),
                 len(opening), len(prod_qty),
-                len(dispatch), len(return_qty), len(closing)
+                len(dispatch), len(return_qty),
+                len(closing), len(adjustment)
             ],
             "Status": [
                 "Error" if items_err else "OK",
@@ -1223,6 +1563,7 @@ elif page == "Data Management":
                 "Error" if dispatch_err else ("Empty" if dispatch.empty else "OK"),
                 "Error" if return_err else ("Empty" if return_qty.empty else "OK"),
                 "Error" if closing_err else ("Empty" if closing.empty else "OK"),
+                "Error" if adjustment_err else ("Empty" if adjustment.empty else "OK"),
             ],
             "Error": [
                 items_err or "-",
@@ -1231,7 +1572,8 @@ elif page == "Data Management":
                 prod_qty_err or "-",
                 dispatch_err or "-",
                 return_err or "-",
-                closing_err or "-"
+                closing_err or "-",
+                adjustment_err or "-",
             ]
         })
         st.dataframe(diag, use_container_width=True, hide_index=True)
@@ -1241,27 +1583,19 @@ elif page == "Data Management":
 
     st.markdown("---")
 
-    st.subheader("Item Registration")
-    st.dataframe(items, use_container_width=True, hide_index=True)
-
-    st.subheader("Production")
-    st.dataframe(production, use_container_width=True, hide_index=True)
-
-    st.subheader("Opening Stock")
-    st.dataframe(opening, use_container_width=True, hide_index=True)
-
-    st.subheader("Production Qty")
-    st.dataframe(prod_qty, use_container_width=True, hide_index=True)
-
-    st.subheader("Dispatch Qty")
-    st.dataframe(dispatch, use_container_width=True, hide_index=True)
-
-    st.subheader("Return Qty")
-    st.dataframe(return_qty, use_container_width=True, hide_index=True)
-
-    st.subheader("Closing Stock")
-    st.dataframe(closing, use_container_width=True, hide_index=True)
+    for label, frame in [
+        ("Item Registration", items),
+        ("Production", production),
+        ("Opening Stock", opening),
+        ("Production Qty", prod_qty),
+        ("Dispatch Qty", dispatch),
+        ("Return Qty", return_qty),
+        ("Closing Stock", closing),
+        ("Stock Adjustment", adjustment),
+    ]:
+        st.subheader(label)
+        st.dataframe(frame, use_container_width=True, hide_index=True)
 
 
 st.markdown("---")
-st.caption("Flex Head Industries Pvt Ltd | ERP Management System")            
+st.caption("Flex Head Industries Pvt Ltd | ERP Management System")
