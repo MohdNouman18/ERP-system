@@ -60,7 +60,12 @@ except Exception as e:
 
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
-STOCK_TABLE = "Stock_Control"
+
+OPENING_TABLE = "Opening_Stock"
+PRODUCTION_QTY_TABLE = "Production_Qty"
+DISPATCH_TABLE = "Dispatch_Qty"
+RETURN_TABLE = "Return_Qty"
+CLOSING_TABLE = "Closing_Stock"
 
 ITEM_COLUMNS = [
     "Item_ID", "Item_Code", "Material_Grade", "Application",
@@ -74,11 +79,11 @@ PRODUCTION_COLUMNS = [
     "Rejected_Qty_m", "Production_Status"
 ]
 
-STOCK_COLUMNS = [
-    "Stock_ID", "Item_ID", "Production_ID", "Batch_No",
-    "Stock_Date", "Opening_Stock_m", "Produced_Qty_m",
-    "Dispatched_Qty_m", "Closing_Stock_m", "Stock_Status"
-]
+OPENING_COLUMNS = ["Opening_Stock_ID", "Item_ID", "Qty"]
+PRODUCTION_QTY_COLUMNS = ["Production_ID", "Item_ID", "Qty"]
+DISPATCH_COLUMNS = ["Dispatch_ID", "Item_ID", "Qty"]
+RETURN_COLUMNS = ["Return_ID", "Item_ID", "Qty"]
+CLOSING_COLUMNS = ["Closing_Stock_ID", "Item_ID", "Qty"]
 
 
 # =========================================================
@@ -134,15 +139,26 @@ def load_all_data():
         PRODUCTION_TABLE, PRODUCTION_COLUMNS,
         ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"]
     )
-    stock, stock_err = load_table(
-        STOCK_TABLE, STOCK_COLUMNS,
-        ["Opening_Stock_m", "Produced_Qty_m",
-         "Dispatched_Qty_m", "Closing_Stock_m"]
+    opening, opening_err = load_table(OPENING_TABLE, OPENING_COLUMNS, ["Qty"])
+    prod_qty, prod_qty_err = load_table(PRODUCTION_QTY_TABLE, PRODUCTION_QTY_COLUMNS, ["Qty"])
+    dispatch, dispatch_err = load_table(DISPATCH_TABLE, DISPATCH_COLUMNS, ["Qty"])
+    return_qty, return_err = load_table(RETURN_TABLE, RETURN_COLUMNS, ["Qty"])
+    closing, closing_err = load_table(CLOSING_TABLE, CLOSING_COLUMNS, ["Qty"])
+
+    return (
+        items, production,
+        opening, prod_qty, dispatch, return_qty, closing,
+        items_err, prod_err,
+        opening_err, prod_qty_err, dispatch_err, return_err, closing_err
     )
-    return items, production, stock, items_err, prod_err, stock_err
 
 
-items, production, stock, items_err, production_err, stock_err = load_all_data()
+(
+    items, production,
+    opening, prod_qty, dispatch, return_qty, closing,
+    items_err, production_err,
+    opening_err, prod_qty_err, dispatch_err, return_err, closing_err
+) = load_all_data()
 
 
 def get_next_id(df, column):
@@ -193,12 +209,143 @@ def empty_state(msg, cta=None):
 
 
 # =========================================================
+# REUSABLE CRUD BLOCK
+# =========================================================
+
+def crud_simple_table(
+    table_name,
+    df,
+    id_col,
+    label,
+    items_df,
+    load_error=None
+):
+    """
+    Generic CRUD UI for tables with columns: <ID>, Item_ID, Qty
+    Used by Opening_Stock, Production_Qty, Dispatch_Qty, Return_Qty, Closing_Stock.
+    """
+
+    if load_error:
+        st.error(f"Failed to load {label}: {load_error}")
+        hint = rls_hint(load_error, table_name, "select")
+        if hint: st.info(hint)
+
+    if len(df) == 0 and not load_error:
+        st.info(f"{label} table is empty. Add the first record from the Add {label} tab below.")
+
+    tab1, tab2, tab3 = st.tabs([f"View {label}", f"Add {label}", "Update / Delete"])
+
+    # ---- VIEW ----
+    with tab1:
+        search = st.text_input(f"Search {label}", key=f"search_{table_name}",
+                               placeholder=f"{id_col}, Item ID...")
+        display = df.copy()
+        if search and not display.empty:
+            mask = display.astype(str).apply(
+                lambda row: row.str.contains(search, case=False, na=False).any(), axis=1
+            )
+            display = display[mask]
+        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.caption(f"{len(display)} record(s)")
+
+    # ---- ADD ----
+    with tab2:
+        next_id = get_next_id(df, id_col)
+        st.info(f"Next {id_col}: {next_id}")
+
+        if items_df.empty:
+            st.warning("Add an item in Item Registration first.")
+        else:
+            with st.form(f"add_{table_name}_form"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    item_options = items_df["Item_ID"].astype(str).tolist()
+                    selected_item = st.selectbox("Item ID", item_options, key=f"add_item_{table_name}")
+                with c2:
+                    qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0,
+                                          key=f"add_qty_{table_name}")
+
+                submit = st.form_submit_button(f"Add {label}", type="primary")
+
+            if submit:
+                payload = {
+                    id_col: next_id,
+                    "Item_ID": selected_item,
+                    "Qty": qty
+                }
+                try:
+                    supabase.table(table_name).insert(payload).execute()
+                    st.success(f"{label} {next_id} added.")
+                    refresh_all()
+                except Exception as e:
+                    st.error(f"{label} add failed.")
+                    st.code(str(e))
+                    hint = rls_hint(str(e), table_name, "insert")
+                    if hint: st.info(hint)
+
+    # ---- UPDATE / DELETE ----
+    with tab3:
+        if df.empty:
+            st.info(f"No {label} records.")
+        else:
+            selected_id = st.selectbox(
+                f"Select {id_col}",
+                df[id_col].astype(str).tolist(),
+                key=f"sel_{table_name}"
+            )
+            selected = df[df[id_col].astype(str) == selected_id].iloc[0]
+
+            with st.form(f"update_{table_name}_form"):
+                c1, c2 = st.columns(2)
+                with c1:
+                    if not items_df.empty:
+                        item_options = items_df["Item_ID"].astype(str).tolist()
+                        current_item = str(selected["Item_ID"]) if pd.notna(selected["Item_ID"]) else ""
+                        default_idx = item_options.index(current_item) if current_item in item_options else 0
+                        edit_item = st.selectbox("Item ID", item_options, index=default_idx,
+                                                 key=f"edit_item_{table_name}")
+                    else:
+                        edit_item = str(selected["Item_ID"]) if pd.notna(selected["Item_ID"]) else ""
+                with c2:
+                    edit_qty = st.number_input(
+                        "Quantity", min_value=0.0,
+                        value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
+                        step=1.0, key=f"edit_qty_{table_name}"
+                    )
+
+                update = st.form_submit_button("Update", type="primary")
+
+            if update:
+                payload = {"Item_ID": edit_item, "Qty": edit_qty}
+                try:
+                    supabase.table(table_name).update(payload).eq(id_col, selected_id).execute()
+                    st.success(f"{label} updated.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Update failed.")
+                    st.code(str(e))
+                    hint = rls_hint(str(e), table_name, "update")
+                    if hint: st.info(hint)
+
+            st.markdown("---")
+            if st.button(f"Delete {label}", type="secondary", key=f"del_{table_name}"):
+                try:
+                    supabase.table(table_name).delete().eq(id_col, selected_id).execute()
+                    st.success(f"{label} deleted.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Delete failed.")
+                    st.code(str(e))
+                    hint = rls_hint(str(e), table_name, "delete")
+                    if hint: st.info(hint)
+
+
+# =========================================================
 # SIDEBAR
 # =========================================================
 
 with st.sidebar:
 
-    # -------- BRAND + LOGO --------
     if os.path.exists("logo.png"):
         st.image("logo.png", use_container_width=True)
     elif os.path.exists("logo.jpg"):
@@ -254,20 +401,22 @@ st.markdown(
 # =========================================================
 
 def data_banner():
-    no_prod = len(production) == 0 and not production_err
-    no_stock = len(stock) == 0 and not stock_err
+    empty = []
+    if len(opening) == 0 and not opening_err:
+        empty.append("Opening Stock")
+    if len(prod_qty) == 0 and not prod_qty_err:
+        empty.append("Production Qty")
+    if len(dispatch) == 0 and not dispatch_err:
+        empty.append("Dispatch Qty")
+    if len(return_qty) == 0 and not return_err:
+        empty.append("Return Qty")
+    if len(closing) == 0 and not closing_err:
+        empty.append("Closing Stock")
 
-    if no_prod or no_stock:
-        missing = []
-        if no_prod:
-            missing.append("Production")
-        if no_stock:
-            missing.append("Stock")
+    if empty:
         st.warning(
-            f"{' and '.join(missing)} table(s) have no records yet, "
-            f"so the charts, dashboard and analytics below appear empty.\n\n"
-            f"Solution: open the Production or Stock Control module from the sidebar "
-            f"to add records, or use Data Management -> Demo Data (for testing)."
+            f"The following stock table(s) have no records yet: **{', '.join(empty)}**.\n\n"
+            f"Open the Stock Control module from the sidebar and use the tabs to add records."
         )
 
 
@@ -280,14 +429,16 @@ if page == "Executive Dashboard":
     st.title("Executive Dashboard")
     st.caption("Real-time overview of manufacturing, production and inventory.")
 
-    data_banner()
-
     registered_items = len(items)
     planned_production = production["Planned_Qty_m"].sum() if not production.empty else 0
     good_production = production["Good_Qty_m"].sum() if not production.empty else 0
     rejected_production = production["Rejected_Qty_m"].sum() if not production.empty else 0
-    dispatched = stock["Dispatched_Qty_m"].sum() if not stock.empty else 0
-    current_stock = stock["Closing_Stock_m"].sum() if not stock.empty else 0
+
+    total_opening = opening["Qty"].sum() if not opening.empty else 0
+    total_produced_qty = prod_qty["Qty"].sum() if not prod_qty.empty else 0
+    total_dispatched = dispatch["Qty"].sum() if not dispatch.empty else 0
+    total_returned = return_qty["Qty"].sum() if not return_qty.empty else 0
+    total_closing = closing["Qty"].sum() if not closing.empty else 0
 
     total_output = good_production + rejected_production
     yield_percentage = (good_production / total_output * 100) if total_output > 0 else 0
@@ -315,9 +466,9 @@ if page == "Executive Dashboard":
     with c3:
         st.markdown(f"""
             <div class="metric-card">
-                <div class="metric-label">Current Stock</div>
-                <div class="metric-value">{current_stock:,.0f} m</div>
-                <div class="metric-caption">Available inventory</div>
+                <div class="metric-label">Closing Stock</div>
+                <div class="metric-value">{total_closing:,.0f}</div>
+                <div class="metric-caption">From Closing_Stock table</div>
             </div>
         """, unsafe_allow_html=True)
 
@@ -332,10 +483,12 @@ if page == "Executive Dashboard":
 
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Planned Production", f"{planned_production:,.0f} m")
-    c2.metric("Rejected Production", f"{rejected_production:,.0f} m")
-    c3.metric("Dispatched", f"{dispatched:,.0f} m")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Opening Stock", f"{total_opening:,.0f}")
+    c2.metric("Produced Qty", f"{total_produced_qty:,.0f}")
+    c3.metric("Dispatched Qty", f"{total_dispatched:,.0f}")
+    c4.metric("Return Qty", f"{total_returned:,.0f}")
+    c5.metric("Closing Stock", f"{total_closing:,.0f}")
 
     st.markdown("---")
 
@@ -367,22 +520,19 @@ if page == "Executive Dashboard":
         else:
             empty_state("No production records found.")
 
-    st.subheader("Current Stock by Item")
-    if not stock.empty:
-        stock_chart = stock.groupby("Item_ID", as_index=False)["Closing_Stock_m"].sum()
-        if not items.empty:
-            lookup = items[["Item_ID", "Item_Code"]].drop_duplicates(subset=["Item_ID"])
-            stock_chart = stock_chart.merge(lookup, on="Item_ID", how="left")
-        else:
-            stock_chart["Item_Code"] = ""
-        stock_chart["Display_Item"] = stock_chart["Item_Code"].fillna("").astype(str)
-        stock_chart.loc[stock_chart["Display_Item"] == "", "Display_Item"] = stock_chart["Item_ID"].astype(str)
-        fig = px.bar(stock_chart, x="Display_Item", y="Closing_Stock_m", text_auto=True)
-        fig.update_layout(xaxis_title="Item", yaxis_title="Closing Stock (m)")
+    st.subheader("Stock Flow Overview")
+
+    flow_data = pd.DataFrame({
+        "Stage": ["Opening", "Produced", "Dispatched", "Returned", "Closing"],
+        "Qty": [total_opening, total_produced_qty, total_dispatched, total_returned, total_closing]
+    })
+
+    if flow_data["Qty"].sum() > 0:
+        fig = px.bar(flow_data, x="Stage", y="Qty", text_auto=True)
         st.plotly_chart(fig, use_container_width=True)
     else:
-        empty_state("No stock records found.",
-                    "Open the Stock Control module from the sidebar to add records.")
+        empty_state("No stock records found yet.",
+                    "Open the Stock Control module to add Opening / Production / Dispatch / Return / Closing records.")
 
 
 # =========================================================
@@ -526,8 +676,7 @@ elif page == "Production":
 
     if len(production) == 0 and not production_err:
         st.info(
-            "Production table is empty. Add the first record from the Add Production tab below. "
-            "If an error appears while adding, it is an RLS policy issue — see Data Management -> Diagnostics."
+            "Production table is empty. Add the first record from the Add Production tab below."
         )
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Production", "Update / Delete"])
@@ -648,513 +797,4 @@ elif page == "Production":
                     if hint: st.info(hint)
 
 
-# =========================================================
-# STOCK CONTROL
-# =========================================================
-
-elif page == "Stock Control":
-
-    st.title("Stock Control")
-
-    if stock_err:
-        st.error(f"Failed to load Stock table: {stock_err}")
-        hint = rls_hint(stock_err, STOCK_TABLE, "select")
-        if hint: st.info(hint)
-
-    if len(stock) == 0 and not stock_err:
-        st.info(
-            "Stock table is empty. Add the first record from the Add Stock tab below. "
-            "If an error appears while adding, it is an RLS policy issue — see Data Management -> Diagnostics."
-        )
-
-    tab1, tab2, tab3 = st.tabs(["View Records", "Add Stock", "Update / Delete"])
-
-    with tab1:
-        search = st.text_input("Search Stock", placeholder="Stock ID, Item ID, Production ID...")
-        display = stock.copy()
-        if search and not display.empty:
-            mask = display.astype(str).apply(
-                lambda row: row.str.contains(search, case=False, na=False).any(), axis=1
-            )
-            display = display[mask]
-        st.dataframe(display, use_container_width=True, hide_index=True)
-        st.caption(f"{len(display)} record(s)")
-
-    with tab2:
-        next_stock_id = get_next_id(stock, "Stock_ID")
-        st.info(f"Next Stock ID: {next_stock_id}")
-
-        if items.empty:
-            st.warning("Add an item in Item Registration first.")
-        elif production.empty:
-            st.warning("Add a production record first.")
-        else:
-            with st.form("add_stock_form"):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    item_options = items["Item_ID"].astype(str).tolist()
-                    selected_item = st.selectbox("Item ID", item_options)
-                    production_options = production["Production_ID"].astype(str).tolist()
-                    selected_production = st.selectbox("Production ID", production_options)
-                    batch_no = st.text_input("Batch No")
-                with c2:
-                    stock_date = st.date_input("Stock Date", value=date.today())
-                    opening_stock = st.number_input("Opening Stock (m)", min_value=0, value=0, step=1)
-                    produced_qty = st.number_input("Produced Qty (m)", min_value=0, value=0, step=1)
-                with c3:
-                    dispatched_qty = st.number_input("Dispatched Qty (m)", min_value=0, value=0, step=1)
-                    closing_stock = st.number_input("Closing Stock (m)", min_value=0, value=0, step=1)
-                    stock_status = st.selectbox("Stock Status",
-                                                ["Available", "Low Stock", "Out of Stock", "Reserved"])
-                submit = st.form_submit_button("Add Stock", type="primary")
-
-            if submit:
-                payload = {
-                    "Stock_ID": next_stock_id,
-                    "Item_ID": selected_item,
-                    "Production_ID": selected_production,
-                    "Batch_No": batch_no.strip(),
-                    "Stock_Date": str(stock_date),
-                    "Opening_Stock_m": opening_stock,
-                    "Produced_Qty_m": produced_qty,
-                    "Dispatched_Qty_m": dispatched_qty,
-                    "Closing_Stock_m": closing_stock,
-                    "Stock_Status": stock_status
-                }
-                try:
-                    supabase.table(STOCK_TABLE).insert(payload).execute()
-                    st.success(f"Stock {next_stock_id} added.")
-                    refresh_all()
-                except Exception as e:
-                    st.error("Stock add failed.")
-                    st.code(str(e))
-                    hint = rls_hint(str(e), STOCK_TABLE, "insert")
-                    if hint: st.info(hint)
-
-    with tab3:
-        if stock.empty:
-            st.info("No stock records.")
-        else:
-            selected_id = st.selectbox("Select Stock ID",
-                                       stock["Stock_ID"].astype(str).tolist())
-            selected = stock[stock["Stock_ID"].astype(str) == selected_id].iloc[0]
-
-            with st.form("update_stock_form"):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    edit_batch = st.text_input("Batch No",
-                                               value=str(selected["Batch_No"]) if pd.notna(selected["Batch_No"]) else "")
-                    edit_opening = st.number_input("Opening Stock", min_value=0,
-                                                   value=max(0, int(selected["Opening_Stock_m"])), step=1)
-                with c2:
-                    edit_produced = st.number_input("Produced Qty", min_value=0,
-                                                    value=max(0, int(selected["Produced_Qty_m"])), step=1)
-                    edit_dispatched = st.number_input("Dispatched Qty", min_value=0,
-                                                      value=max(0, int(selected["Dispatched_Qty_m"])), step=1)
-                with c3:
-                    edit_closing = st.number_input("Closing Stock", min_value=0,
-                                                   value=max(0, int(selected["Closing_Stock_m"])), step=1)
-                    status_options = ["Available", "Low Stock", "Out of Stock", "Reserved"]
-                    current_status = str(selected["Stock_Status"])
-                    edit_status = st.selectbox(
-                        "Stock Status", status_options,
-                        index=(status_options.index(current_status) if current_status in status_options else 0)
-                    )
-                update = st.form_submit_button("Update Stock", type="primary")
-
-            if update:
-                payload = {
-                    "Batch_No": edit_batch, "Opening_Stock_m": edit_opening,
-                    "Produced_Qty_m": edit_produced, "Dispatched_Qty_m": edit_dispatched,
-                    "Closing_Stock_m": edit_closing, "Stock_Status": edit_status
-                }
-                try:
-                    supabase.table(STOCK_TABLE).update(payload).eq("Stock_ID", selected_id).execute()
-                    st.success("Stock updated.")
-                    refresh_all()
-                except Exception as e:
-                    st.error("Update failed.")
-                    st.code(str(e))
-                    hint = rls_hint(str(e), STOCK_TABLE, "update")
-                    if hint: st.info(hint)
-
-            if st.button("Delete Stock"):
-                try:
-                    supabase.table(STOCK_TABLE).delete().eq("Stock_ID", selected_id).execute()
-                    st.success("Stock deleted.")
-                    refresh_all()
-                except Exception as e:
-                    st.error("Delete failed.")
-                    st.code(str(e))
-                    hint = rls_hint(str(e), STOCK_TABLE, "delete")
-                    if hint: st.info(hint)
-
-
-# =========================================================
-# ANALYTICS
-# =========================================================
-
-elif page == "Analytics":
-
-    st.title("Analytics")
-    st.caption("Production and inventory performance.")
-
-    data_banner()
-
-    st.subheader("Production Performance")
-    if not production.empty:
-        total_planned = production["Planned_Qty_m"].sum()
-        total_good = production["Good_Qty_m"].sum()
-        total_rejected = production["Rejected_Qty_m"].sum()
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Planned", f"{total_planned:,.0f} m")
-        c2.metric("Good", f"{total_good:,.0f} m")
-        c3.metric("Rejected", f"{total_rejected:,.0f} m")
-        analysis = pd.DataFrame({
-            "Type": ["Good Production", "Rejected Production"],
-            "Quantity": [total_good, total_rejected]
-        })
-        fig = px.bar(analysis, x="Type", y="Quantity", text_auto=True)
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        empty_state("No production data available.",
-                    "Open the Production module from the sidebar to add records.")
-
-    st.markdown("---")
-
-    st.subheader("Inventory Analysis")
-    if not stock.empty:
-        stock_analysis = stock.groupby("Item_ID", as_index=False).agg(
-            Opening_Stock=("Opening_Stock_m", "sum"),
-            Produced=("Produced_Qty_m", "sum"),
-            Dispatched=("Dispatched_Qty_m", "sum"),
-            Closing_Stock=("Closing_Stock_m", "sum")
-        )
-        st.dataframe(stock_analysis, use_container_width=True, hide_index=True)
-        fig = px.bar(stock_analysis, x="Item_ID",
-                     y=["Opening_Stock", "Produced", "Dispatched", "Closing_Stock"],
-                     barmode="group")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        empty_state("No stock data available.",
-                    "Open the Stock Control module from the sidebar to add records.")
-
-
-# =========================================================
-# CUSTOM CHARTS
-# =========================================================
-
-elif page == "Custom Charts":
-
-    st.title("Custom Charts")
-    st.caption("Build your own charts — choose data source, chart type, axes and aggregation.")
-
-    st.markdown("### 1. Data Source")
-
-    source_options = {
-        "Production": production,
-        "Stock Control": stock,
-        "Item Registration": items,
-    }
-
-    source_name = st.selectbox(
-        "Select a dataset",
-        list(source_options.keys())
-    )
-
-    df = source_options[source_name].copy()
-
-    if df.empty:
-        empty_state(
-            f"{source_name} has no records.",
-            "Add records in that module first, then come back here."
-        )
-        st.stop()
-
-    st.markdown("### 2. Filters (optional)")
-
-    with st.expander("Apply filters", expanded=False):
-        filter_cols = st.multiselect(
-            "Filter by column",
-            options=[c for c in df.columns if df[c].dtype == "object" or df[c].nunique() < 30],
-            default=[]
-        )
-
-        filtered_df = df.copy()
-
-        for col in filter_cols:
-            unique_vals = df[col].dropna().astype(str).unique().tolist()
-            if not unique_vals:
-                continue
-            picked = st.multiselect(f"Values for {col}", unique_vals,
-                                    default=unique_vals, key=f"filter_{col}")
-            filtered_df = filtered_df[filtered_df[col].astype(str).isin(picked)]
-
-    df = filtered_df
-
-    if df.empty:
-        st.warning("No data left after filters. Change the filters.")
-        st.stop()
-
-    st.markdown("### 3. Chart Configuration")
-
-    numeric_cols = [c for c in df.columns
-                    if pd.api.types.is_numeric_dtype(df[c])]
-    all_cols = df.columns.tolist()
-
-    chart_type = st.selectbox(
-        "Chart Type",
-        [
-            "Bar Chart",
-            "Grouped Bar Chart",
-            "Stacked Bar Chart",
-            "Line Chart",
-            "Area Chart",
-            "Pie Chart",
-            "Donut Chart",
-            "Scatter Plot",
-            "Histogram",
-            "Box Plot",
-        ]
-    )
-
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-        x_axis = st.selectbox("X-axis (category / group)", all_cols,
-                              index=(all_cols.index("Item_ID") if "Item_ID" in all_cols else 0))
-
-    with c2:
-        y_axis = st.selectbox("Y-axis (numeric)",
-                              numeric_cols if numeric_cols else ["(no numeric column)"])
-
-    with c3:
-        color_by = st.selectbox(
-            "Color / Group by (optional)",
-            ["(none)"] + all_cols,
-            index=0
-        )
-
-    agg_choice = "None"
-    if chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
-        agg_choice = st.selectbox(
-            "Aggregation (when X has multiple rows)",
-            ["sum", "mean", "count", "max", "min"],
-            index=0
-        )
-
-    top_n = st.slider("Show top N categories (0 = all)", 0, 50, 0)
-
-    sort_order = st.radio("Sort order", ["Descending", "Ascending", "None"], horizontal=True)
-
-    st.markdown("### 4. Chart")
-
-    plot_df = df.copy()
-
-    try:
-        if agg_choice != "None" and chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
-            group_cols = [x_axis]
-            if color_by != "(none)" and color_by != x_axis:
-                group_cols.append(color_by)
-
-            if agg_choice == "count":
-                plot_df = (
-                    plot_df.groupby(group_cols)[y_axis]
-                    .count().reset_index()
-                    .rename(columns={y_axis: "count"})
-                )
-                y_plot = "count"
-            else:
-                plot_df = (
-                    plot_df.groupby(group_cols)[y_axis]
-                    .agg(agg_choice).reset_index()
-                )
-                y_plot = y_axis
-        else:
-            y_plot = y_axis
-
-        if agg_choice != "None" and y_plot in plot_df.columns and sort_order != "None":
-            plot_df = plot_df.sort_values(
-                y_plot, ascending=(sort_order == "Ascending")
-            )
-
-        if top_n > 0 and y_plot in plot_df.columns:
-            plot_df = plot_df.head(top_n)
-
-        if chart_type == "Bar Chart":
-            fig = px.bar(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None),
-                         text_auto=True)
-
-        elif chart_type == "Grouped Bar Chart":
-            fig = px.bar(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None),
-                         barmode="group")
-
-        elif chart_type == "Stacked Bar Chart":
-            fig = px.bar(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None),
-                         barmode="stack")
-
-        elif chart_type == "Line Chart":
-            fig = px.line(plot_df, x=x_axis, y=y_plot,
-                          color=(color_by if color_by != "(none)" else None),
-                          markers=True)
-
-        elif chart_type == "Area Chart":
-            fig = px.area(plot_df, x=x_axis, y=y_plot,
-                          color=(color_by if color_by != "(none)" else None))
-
-        elif chart_type == "Pie Chart":
-            fig = px.pie(plot_df, names=x_axis, values=y_plot)
-
-        elif chart_type == "Donut Chart":
-            fig = px.pie(plot_df, names=x_axis, values=y_plot, hole=0.5)
-
-        elif chart_type == "Scatter Plot":
-            fig = px.scatter(plot_df, x=x_axis, y=y_plot,
-                             color=(color_by if color_by != "(none)" else None))
-
-        elif chart_type == "Histogram":
-            fig = px.histogram(plot_df, x=x_axis,
-                               color=(color_by if color_by != "(none)" else None))
-
-        elif chart_type == "Box Plot":
-            fig = px.box(plot_df, x=x_axis, y=y_plot,
-                         color=(color_by if color_by != "(none)" else None))
-        else:
-            fig = None
-
-        if fig is not None:
-            fig.update_layout(
-                margin=dict(l=10, r=10, t=40, b=10),
-                height=520,
-                legend_title_text=(color_by if color_by != "(none)" else "")
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        with st.expander("View underlying chart data"):
-            st.dataframe(plot_df, use_container_width=True, hide_index=True)
-            st.caption(f"{len(plot_df)} row(s)")
-
-        csv = plot_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download chart data as CSV",
-            data=csv,
-            file_name=f"custom_chart_{source_name.lower().replace(' ', '_')}.csv",
-            mime="text/csv"
-        )
-
-    except Exception as e:
-        st.error("Error while building the chart.")
-        st.code(str(e))
-        st.info("Try a different X / Y combination, or clear Color / Group by.")
-
-
-# =========================================================
-# DATA MANAGEMENT
-# =========================================================
-
-elif page == "Data Management":
-
-    st.title("Data Management")
-    st.caption("Live database records and diagnostics.")
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Item Records", len(items))
-    c2.metric("Production Records", len(production))
-    c3.metric("Stock Records", len(stock))
-
-    st.markdown("---")
-
-    st.subheader("Test Connection (Demo Data)")
-    st.caption(
-        "This button inserts one test production and one test stock record. "
-        "If the insert succeeds, the RLS policies are correct and you can add records manually."
-    )
-
-    if items.empty:
-        st.warning("Add at least one item in Item Registration first.")
-    else:
-        if st.button("Insert 1 Demo Production + 1 Demo Stock Record"):
-            try:
-                pid = get_next_id(production, "Production_ID")
-                first_item_id = str(items["Item_ID"].iloc[0])
-                today = date.today()
-
-                prod_payload = {
-                    "Production_ID": pid,
-                    "Item_ID": first_item_id,
-                    "Production_Date": str(today),
-                    "Batch_No": f"DEMO-{pid}",
-                    "Production_Line": "Line-1",
-                    "Planned_Qty_m": 1000,
-                    "Good_Qty_m": 950,
-                    "Rejected_Qty_m": 50,
-                    "Production_Status": "Completed"
-                }
-                supabase.table(PRODUCTION_TABLE).insert(prod_payload).execute()
-                st.success(f"Demo Production {pid} inserted.")
-
-                sid = get_next_id(stock, "Stock_ID")
-                stock_payload = {
-                    "Stock_ID": sid,
-                    "Item_ID": first_item_id,
-                    "Production_ID": pid,
-                    "Batch_No": f"DEMO-{pid}",
-                    "Stock_Date": str(today),
-                    "Opening_Stock_m": 0,
-                    "Produced_Qty_m": 950,
-                    "Dispatched_Qty_m": 100,
-                    "Closing_Stock_m": 850,
-                    "Stock_Status": "Available"
-                }
-                supabase.table(STOCK_TABLE).insert(stock_payload).execute()
-                st.success(f"Demo Stock {sid} inserted.")
-
-                st.balloons()
-                refresh_all()
-
-            except Exception as e:
-                st.error("Demo insert failed.")
-                st.code(str(e))
-                hint = rls_hint(str(e), "Production/Stock", "insert")
-                if hint:
-                    st.warning(hint)
-
-    st.markdown("---")
-
-    with st.expander("Table Diagnostics", expanded=False):
-        diag = pd.DataFrame({
-            "Table": [ITEM_TABLE, PRODUCTION_TABLE, STOCK_TABLE],
-            "Rows Loaded": [len(items), len(production), len(stock)],
-            "Status": [
-                "Error" if items_err else "OK",
-                "Error" if production_err else ("Empty" if len(production) == 0 else "OK"),
-                "Error" if stock_err else ("Empty" if len(stock) == 0 else "OK"),
-            ],
-            "Error": [items_err or "-", production_err or "-", stock_err or "-"]
-        })
-        st.dataframe(diag, use_container_width=True, hide_index=True)
-
-        if st.button("Force Reload All Data"):
-            refresh_all()
-
-    st.markdown("---")
-
-    st.subheader("Item Registration")
-    st.dataframe(items, use_container_width=True, hide_index=True)
-
-    st.subheader("Production")
-    st.dataframe(production, use_container_width=True, hide_index=True)
-
-    st.subheader("Stock Control")
-    st.dataframe(stock, use_container_width=True, hide_index=True)
-
-
-# =========================================================
-# FOOTER
-# =========================================================
-
-st.markdown("---")
-st.caption("Flex Head Industries Pvt Ltd | ERP Management System")
+# =================================
