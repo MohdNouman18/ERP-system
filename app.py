@@ -16,10 +16,6 @@ st.set_page_config(
 )
 
 
-# =========================================================
-# CONSTANTS
-# =========================================================
-
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
 OPENING_TABLE = "Opening_Stock"
@@ -49,24 +45,19 @@ ADJUSTMENT_COLUMNS = (
     "Qty", "Reason", "Remarks"
 )
 
-# ID prefixes per table
 ID_PREFIX = {
-    ITEM_TABLE:          ("Item_ID",          "ITM"),
-    PRODUCTION_TABLE:    ("Production_ID",    "PRD"),
-    OPENING_TABLE:       ("Opening_Stock_ID", "OPN"),
-    PRODUCTION_QTY_TABLE:("Production_ID",    "PQT"),
-    DISPATCH_TABLE:      ("Dispatch_ID",      "DSP"),
-    RETURN_TABLE:        ("Return_ID",        "RET"),
-    CLOSING_TABLE:       ("Closing_Stock_ID", "CLS"),
-    ADJUSTMENT_TABLE:    ("Adjustment_ID",    "ADJ"),
+    ITEM_TABLE:           ("Item_ID",          "ITM"),
+    PRODUCTION_TABLE:     ("Production_ID",    "PRD"),
+    OPENING_TABLE:        ("Opening_Stock_ID", "OPN"),
+    PRODUCTION_QTY_TABLE: ("Production_ID",    "PQT"),
+    DISPATCH_TABLE:       ("Dispatch_ID",      "DSP"),
+    RETURN_TABLE:         ("Return_ID",        "RET"),
+    CLOSING_TABLE:        ("Closing_Stock_ID", "CLS"),
+    ADJUSTMENT_TABLE:     ("Adjustment_ID",    "ADJ"),
 }
 
 CACHE_TTL = 300
 
-
-# =========================================================
-# CSS
-# =========================================================
 
 @st.cache_data(show_spinner=False)
 def _read_css():
@@ -83,10 +74,6 @@ if _css:
 else:
     st.warning("style.css not found.")
 
-
-# =========================================================
-# SUPABASE CLIENT
-# =========================================================
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client(url: str, key: str) -> Client:
@@ -107,10 +94,6 @@ except Exception as e:
     st.code(str(e))
     st.stop()
 
-
-# =========================================================
-# DATAFRAME HELPERS
-# =========================================================
 
 def _normalize_columns(df, expected):
     if df is None or df.empty:
@@ -141,10 +124,6 @@ def convert_numeric(df, columns):
         df[present] = df[present].apply(pd.to_numeric, errors="coerce").fillna(0)
     return df
 
-
-# =========================================================
-# DATA LOADING
-# =========================================================
 
 def _fetch_raw(table_name):
     try:
@@ -213,19 +192,12 @@ def load_all_data():
 ) = load_all_data()
 
 
-# =========================================================
-# AUTO-ID GENERATION
-# =========================================================
-
 def get_next_id(df: pd.DataFrame, id_col: str, prefix: str) -> str:
-    """Generate next ID like ITM-001, ITM-002 ...
-    Works with legacy numeric IDs too."""
     if df.empty or id_col not in df.columns:
         return f"{prefix}-001"
 
     nums = []
     for v in df[id_col].dropna().astype(str):
-        # Extract numeric part
         if prefix and v.startswith(f"{prefix}-"):
             tail = v[len(prefix) + 1:]
         else:
@@ -246,19 +218,11 @@ def next_id_for(table_name: str, df: pd.DataFrame) -> str:
     return get_next_id(df, id_col, prefix)
 
 
-# =========================================================
-# AUTO-CLOSING STOCK COMPUTATION
-# =========================================================
-
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def compute_stock_ledger(
     items_df, opening_df, prod_qty_df,
     dispatch_df, return_df, adjustment_df
-) -> pd.DataFrame:
-    """
-    Item-wise stock ledger.
-    Formula: Closing = Opening + Produced - Dispatched + Returned + Adjusted
-    """
+):
     if items_df.empty:
         return pd.DataFrame(columns=[
             "Item_ID", "Item_Code", "Opening", "Produced",
@@ -275,11 +239,11 @@ def compute_stock_ledger(
     base = items_df[["Item_ID", "Item_Code"]].copy()
 
     for df, name in [
-        (opening_df,   "Opening"),
-        (prod_qty_df,  "Produced"),
-        (dispatch_df,  "Dispatched"),
-        (return_df,    "Returned"),
-        (adjustment_df,"Adjusted"),
+        (opening_df,    "Opening"),
+        (prod_qty_df,   "Produced"),
+        (dispatch_df,   "Dispatched"),
+        (return_df,     "Returned"),
+        (adjustment_df, "Adjusted"),
     ]:
         base = base.merge(_grp(df, name), on="Item_ID", how="left")
 
@@ -332,10 +296,6 @@ TOTALS = compute_totals(
 )
 
 
-# =========================================================
-# UI HELPERS
-# =========================================================
-
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_item_options(items_df: pd.DataFrame) -> list:
     if items_df.empty:
@@ -375,7 +335,7 @@ def rls_hint(err, table, action="insert"):
     if "duplicate key" in e or "unique constraint" in e:
         return f"Duplicate ID in {table}."
     if "foreign key" in e or "violates foreign key" in e:
-        return f"Foreign key violation — Item_ID {table} mein maujood nahi."
+        return f"Foreign key violation on {table}."
     return None
 
 
@@ -403,23 +363,14 @@ def data_banner():
     if adjustment.empty and not adjustment_err: empty.append("Stock Adjustment")
 
     if empty:
-        st.warning(
-            f"The following table(s) have no records yet: **{', '.join(empty)}**.\n\n"
-            f"Open the Stock Control or Stock Adjustment module to add records."
-        )
+        st.warning(f"No records in: **{', '.join(empty)}**.")
 
-
-# =========================================================
-# GENERIC CRUD FOR SIMPLE STOCK TABLES
-# =========================================================
 
 def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
         st.error(f"Failed to load {label}: {load_error}")
         h = rls_hint(load_error, table_name, "select")
         if h: st.info(h)
-    elif df.empty:
-        st.info(f"{label} table is empty. Add the first record below.")
 
     tab1, tab2, tab3 = st.tabs([f"View {label}", f"Add {label}", "Update / Delete"])
 
@@ -521,10 +472,6 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
                 if h: st.info(h)
 
 
-# =========================================================
-# SIDEBAR
-# =========================================================
-
 with st.sidebar:
     if os.path.exists("logo.png"):
         st.image("logo.png", use_container_width=True)
@@ -573,14 +520,9 @@ st.markdown(
 )
 
 
-# =========================================================
-# EXECUTIVE DASHBOARD
-# =========================================================
-
 if page == "Executive Dashboard":
 
     st.title("Executive Dashboard")
-    st.caption("Real-time overview of manufacturing, production and inventory.")
 
     t = TOTALS
     registered_items = len(items)
@@ -610,7 +552,7 @@ if page == "Executive Dashboard":
             <div class="metric-card">
                 <div class="metric-label">Current Closing Stock</div>
                 <div class="metric-value">{t['closing']:,.0f}</div>
-                <div class="metric-caption">Auto-computed from ledger</div>
+                <div class="metric-caption">Available inventory</div>
             </div>
         """, unsafe_allow_html=True)
 
@@ -680,16 +622,12 @@ if page == "Executive Dashboard":
     else:
         empty_state("No stock records found yet.")
 
-    st.subheader("Auto-Computed Stock Ledger")
+    st.subheader("Stock Ledger")
     if not STOCK_LEDGER.empty:
         st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
     else:
         empty_state("No ledger data available.")
 
-
-# =========================================================
-# ITEM REGISTRATION
-# =========================================================
 
 elif page == "Item Registration":
 
@@ -843,10 +781,6 @@ elif page == "Item Registration":
                     if h: st.info(h)
 
 
-# =========================================================
-# PRODUCTION
-# =========================================================
-
 elif page == "Production":
 
     st.title("Production")
@@ -855,9 +789,6 @@ elif page == "Production":
         st.error(f"Failed to load Production table: {production_err}")
         h = rls_hint(production_err, PRODUCTION_TABLE, "select")
         if h: st.info(h)
-
-    if production.empty and not production_err:
-        st.info("Production table is empty. Add the first record below.")
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Production", "Update / Delete"])
 
@@ -997,14 +928,9 @@ elif page == "Production":
                     if h: st.info(h)
 
 
-# =========================================================
-# STOCK CONTROL
-# =========================================================
-
 elif page == "Stock Control":
 
     st.title("Stock Control")
-    st.caption("Opening, Production, Dispatch, Return, and auto-computed Closing stock.")
 
     data_banner()
 
@@ -1013,7 +939,7 @@ elif page == "Stock Control":
         "Production Qty",
         "Dispatch Qty",
         "Return Qty",
-        "Closing Stock (Auto)"
+        "Closing Stock"
     ])
 
     with stock_tabs[0]:
@@ -1041,39 +967,26 @@ elif page == "Stock Control":
         )
 
     with stock_tabs[4]:
-        st.markdown("### Auto-Computed Closing Stock")
-        st.caption(
-            "Closing = Opening + Produced − Dispatched + Returned + Adjusted. "
-            "Ye values har entry pe automatically recalculate hoti hain."
-        )
+        st.markdown("### Closing Stock")
         if not STOCK_LEDGER.empty:
             st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
         else:
             empty_state("No stock data available yet.")
 
 
-# =========================================================
-# STOCK ADJUSTMENT
-# =========================================================
-
 elif page == "Stock Adjustment":
 
     st.title("Stock Adjustment")
-    st.caption("Record stock corrections: damage, loss, found, physical-check discrepancies.")
 
     if adjustment_err:
         st.error(f"Failed to load Stock_Adjustment table: {adjustment_err}")
         h = rls_hint(adjustment_err, ADJUSTMENT_TABLE, "select")
         if h: st.info(h)
 
-    if adjustment.empty and not adjustment_err:
-        st.info("Stock_Adjustment table is empty. Add the first record below.")
-
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Adjustment", "Update / Delete"])
 
     reasons = ["Physical Check", "Damage", "Loss", "Found", "Other"]
 
-    # ---- VIEW ----
     with tab1:
         search = st.text_input("Search Adjustment",
                                placeholder="Adjustment ID, Item ID, Reason...")
@@ -1081,7 +994,6 @@ elif page == "Stock Adjustment":
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
 
-    # ---- ADD ----
     with tab2:
         next_adj_id = next_id_for(ADJUSTMENT_TABLE, adjustment)
         st.info(f"Next Adjustment ID: {next_adj_id}")
@@ -1124,7 +1036,6 @@ elif page == "Stock Adjustment":
                     h = rls_hint(str(e), ADJUSTMENT_TABLE, "insert")
                     if h: st.info(h)
 
-    # ---- UPDATE / DELETE ----
     with tab3:
         if adjustment.empty:
             st.info("No adjustment records.")
@@ -1156,7 +1067,8 @@ elif page == "Stock Adjustment":
                     )
                 with c2:
                     edit_qty = st.number_input(
-                        "Quantity", value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
+                        "Quantity",
+                        value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
                         step=1.0
                     )
                     edit_reason = st.selectbox("Reason", reasons, index=reason_idx)
@@ -1209,17 +1121,9 @@ elif page == "Stock Adjustment":
         empty_state("No adjustments yet.")
 
 
-# =========================================================
-# PHYSICAL CHECK
-# =========================================================
-
 elif page == "Physical Check":
 
     st.title("Physical Check")
-    st.caption(
-        "Compare system closing stock with physical count. "
-        "Differences automatically create Stock_Adjustment entries."
-    )
 
     if STOCK_LEDGER.empty:
         empty_state("No stock data available yet.")
@@ -1237,7 +1141,6 @@ elif page == "Physical Check":
 
     st.subheader("Enter Physical Counts")
 
-    # Build a form with input per item
     with st.form("physical_check_form"):
         counts = {}
         for _, row in ledger.iterrows():
@@ -1272,7 +1175,6 @@ elif page == "Physical Check":
         skipped = 0
         errors = []
 
-        # Reload adjustment to get next ID
         try:
             adj_resp = supabase.table(ADJUSTMENT_TABLE).select("*").execute()
             current_adj_df = make_df(adj_resp.data or [], ADJUSTMENT_COLUMNS)
@@ -1301,7 +1203,6 @@ elif page == "Physical Check":
 
             try:
                 supabase.table(ADJUSTMENT_TABLE).insert(payload).execute()
-                # Append to local DF so next ID generation stays correct
                 current_adj_df = pd.concat(
                     [current_adj_df, pd.DataFrame([payload])],
                     ignore_index=True
@@ -1313,7 +1214,7 @@ elif page == "Physical Check":
         if inserted:
             st.success(f"{inserted} adjustment(s) created.")
         if skipped:
-            st.info(f"{skipped} item(s) matched — no adjustment needed.")
+            st.info(f"{skipped} item(s) matched.")
         if errors:
             st.error("Some entries failed:")
             for e in errors:
@@ -1335,14 +1236,9 @@ elif page == "Physical Check":
         st.info("No adjustment records yet.")
 
 
-# =========================================================
-# ANALYTICS
-# =========================================================
-
 elif page == "Analytics":
 
     st.title("Analytics")
-    st.caption("Production and inventory performance.")
 
     data_banner()
 
@@ -1377,14 +1273,9 @@ elif page == "Analytics":
         empty_state("No stock data available.")
 
 
-# =========================================================
-# CUSTOM CHARTS
-# =========================================================
-
 elif page == "Custom Charts":
 
     st.title("Custom Charts")
-    st.caption("Build your own charts — pick data source, chart type, axes.")
 
     source_options = {
         "Production": production,
@@ -1394,7 +1285,7 @@ elif page == "Custom Charts":
         "Dispatch Qty": dispatch,
         "Return Qty": return_qty,
         "Stock Adjustment": adjustment,
-        "Stock Ledger (computed)": STOCK_LEDGER,
+        "Stock Ledger": STOCK_LEDGER,
     }
 
     source_name = st.selectbox("Select a dataset", list(source_options.keys()))
@@ -1524,20 +1415,15 @@ elif page == "Custom Charts":
         st.code(str(e))
 
 
-# =========================================================
-# DATA MANAGEMENT
-# =========================================================
-
 elif page == "Data Management":
 
     st.title("Data Management")
-    st.caption("Live database records and diagnostics.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Items", len(items))
     c2.metric("Production", len(production))
     c3.metric("Adjustments", len(adjustment))
-    c4.metric("Stock Ledger Rows", len(STOCK_LEDGER))
+    c4.metric("Ledger Rows", len(STOCK_LEDGER))
 
     st.markdown("---")
 
@@ -1549,7 +1435,7 @@ elif page == "Data Management":
                 DISPATCH_TABLE, RETURN_TABLE,
                 CLOSING_TABLE, ADJUSTMENT_TABLE
             ],
-            "Rows Loaded": [
+            "Rows": [
                 len(items), len(production),
                 len(opening), len(prod_qty),
                 len(dispatch), len(return_qty),
