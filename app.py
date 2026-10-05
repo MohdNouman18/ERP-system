@@ -8,10 +8,6 @@ from datetime import date
 from supabase import create_client, Client
 
 
-# =========================================================
-# PAGE CONFIG
-# =========================================================
-
 st.set_page_config(
     page_title="Flex Head Industries | ERP",
     page_icon="logo.png" if os.path.exists("logo.png") else None,
@@ -19,10 +15,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-
-# =========================================================
-# CONSTANTS
-# =========================================================
 
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
@@ -51,10 +43,6 @@ CLOSING_COLUMNS = ("Closing_Stock_ID", "Item_ID", "Qty")
 CACHE_TTL = 300
 
 
-# =========================================================
-# CSS (cached read)
-# =========================================================
-
 @st.cache_data(show_spinner=False)
 def _read_css():
     try:
@@ -70,10 +58,6 @@ if _css is None:
 else:
     st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
 
-
-# =========================================================
-# SUPABASE CLIENT
-# =========================================================
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client(url: str, key: str) -> Client:
@@ -95,10 +79,6 @@ except Exception as e:
     st.code(str(e))
     st.stop()
 
-
-# =========================================================
-# FAST DATAFRAME HELPERS
-# =========================================================
 
 def _normalize_columns(df: pd.DataFrame, expected: tuple) -> pd.DataFrame:
     if df is None or df.empty:
@@ -134,10 +114,6 @@ def convert_numeric(df: pd.DataFrame, columns) -> pd.DataFrame:
     return df
 
 
-# =========================================================
-# PARALLEL DATA LOADING
-# =========================================================
-
 def _fetch_raw(table_name: str):
     try:
         resp = supabase.table(table_name).select("*").execute()
@@ -169,21 +145,21 @@ def load_all_data():
     ]
 
     with ThreadPoolExecutor(max_workers=len(specs)) as pool:
-        raw_results = [f.result() for f in
-                       [pool.submit(_fetch_raw, s[0]) for s in specs]]
+        futures = [pool.submit(_fetch_raw, s[0]) for s in specs]
+        raw_results = [f.result() for f in futures]
 
     results = [
         _process(specs[i][1], specs[i][2], raw_results[i][0], raw_results[i][1])
         for i in range(len(specs))
     ]
 
-    (items, items_err) = results[0]
-    (production, production_err) = results[1]
-    (opening, opening_err) = results[2]
-    (prod_qty, prod_qty_err) = results[3]
-    (dispatch, dispatch_err) = results[4]
-    (return_qty, return_err) = results[5]
-    (closing, closing_err) = results[6]
+    items, items_err = results[0]
+    production, production_err = results[1]
+    opening, opening_err = results[2]
+    prod_qty, prod_qty_err = results[3]
+    dispatch, dispatch_err = results[4]
+    return_qty, return_err = results[5]
+    closing, closing_err = results[6]
 
     return (
         items, production,
@@ -200,10 +176,6 @@ def load_all_data():
     opening_err, prod_qty_err, dispatch_err, return_err, closing_err
 ) = load_all_data()
 
-
-# =========================================================
-# DERIVED HELPERS
-# =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_item_options(items_df: pd.DataFrame) -> list:
@@ -264,10 +236,6 @@ def filter_df(df: pd.DataFrame, search: str) -> pd.DataFrame:
     return df[mask]
 
 
-# =========================================================
-# ERROR HINTS + EMPTY STATE
-# =========================================================
-
 def rls_hint(err: str, table: str, action: str = "insert"):
     e = err.lower()
     if "row-level security" in e or "rls" in e or "policy" in e:
@@ -298,10 +266,6 @@ def empty_state(msg: str, cta: str = None):
         unsafe_allow_html=True
     )
 
-
-# =========================================================
-# GENERIC CRUD
-# =========================================================
 
 def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
@@ -413,11 +377,7 @@ def crud_simple_table(table_name, df, id_col, label, items_df, load_error=None):
                 hint = rls_hint(str(e), table_name, "delete")
                 if hint:
                     st.info(hint)
-
-
-# =========================================================
-# SIDEBAR
-# =========================================================
+        
 
 with st.sidebar:
     if os.path.exists("logo.png"):
@@ -460,19 +420,11 @@ with st.sidebar:
         refresh_all()
 
 
-# =========================================================
-# PAGE HEADER
-# =========================================================
-
 st.markdown(
     "<div class='page-kicker'>FLEX HEAD INDUSTRIES PVT LTD</div>",
     unsafe_allow_html=True
 )
 
-
-# =========================================================
-# DATA BANNER
-# =========================================================
 
 def data_banner():
     empty = []
@@ -493,10 +445,6 @@ def data_banner():
             f"Open the Stock Control module from the sidebar and use the tabs to add records."
         )
 
-
-# =========================================================
-# EXECUTIVE DASHBOARD
-# =========================================================
 
 if page == "Executive Dashboard":
 
@@ -607,10 +555,6 @@ if page == "Executive Dashboard":
             "Dispatch / Return / Closing records."
         )
 
-
-# =========================================================
-# ITEM REGISTRATION
-# =========================================================
 
 elif page == "Item Registration":
 
@@ -768,10 +712,6 @@ elif page == "Item Registration":
                         st.info(hint)
 
 
-# =========================================================
-# PRODUCTION
-# =========================================================
-
 elif page == "Production":
 
     st.title("Production")
@@ -928,10 +868,6 @@ elif page == "Production":
                         st.info(hint)
 
 
-# =========================================================
-# STOCK CONTROL
-# =========================================================
-
 elif page == "Stock Control":
 
     st.title("Stock Control")
@@ -962,4 +898,370 @@ elif page == "Stock Control":
     with stock_tabs[2]:
         crud_simple_table(
             DISPATCH_TABLE, dispatch, "Dispatch_ID",
-            "Dispatch Qty",
+            "Dispatch Qty", items, dispatch_err
+        )
+
+    with stock_tabs[3]:
+        crud_simple_table(
+            RETURN_TABLE, return_qty, "Return_ID",
+            "Return Qty", items, return_err
+        )
+
+    with stock_tabs[4]:
+        crud_simple_table(
+            CLOSING_TABLE, closing, "Closing_Stock_ID",
+            "Closing Stock", items, closing_err
+        )
+
+
+elif page == "Analytics":
+
+    st.title("Analytics")
+    st.caption("Production and inventory performance.")
+
+    data_banner()
+
+    st.subheader("Production Performance")
+    if not production.empty:
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Planned", f"{TOTALS['planned']:,.0f} m")
+        c2.metric("Good", f"{TOTALS['good']:,.0f} m")
+        c3.metric("Rejected", f"{TOTALS['rejected']:,.0f} m")
+
+        analysis = pd.DataFrame({
+            "Type": ["Good Production", "Rejected Production"],
+            "Quantity": [TOTALS["good"], TOTALS["rejected"]]
+        })
+        fig = px.bar(analysis, x="Type", y="Quantity", text_auto=True)
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        empty_state("No production data available.",
+                    "Open the Production module from the sidebar to add records.")
+
+    st.markdown("---")
+
+    st.subheader("Stock Summary by Item")
+
+    stock_frames = [
+        (opening, "Opening_Stock"),
+        (prod_qty, "Production_Qty"),
+        (dispatch, "Dispatch_Qty"),
+        (return_qty, "Return_Qty"),
+        (closing, "Closing_Stock"),
+    ]
+
+    stock_summary = None
+    for frame, col_name in stock_frames:
+        if not frame.empty:
+            grouped = frame.groupby("Item_ID", as_index=False)["Qty"].sum()
+            grouped = grouped.rename(columns={"Qty": col_name})
+            stock_summary = grouped if stock_summary is None else stock_summary.merge(
+                grouped, on="Item_ID", how="outer"
+            )
+
+    if stock_summary is not None and not stock_summary.empty:
+        stock_summary = stock_summary.fillna(0)
+        st.dataframe(stock_summary, use_container_width=True, hide_index=True)
+
+        value_cols = [c for c in stock_summary.columns if c != "Item_ID"]
+        fig = px.bar(stock_summary, x="Item_ID", y=value_cols, barmode="group")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        empty_state("No stock data available.",
+                    "Open the Stock Control module from the sidebar to add records.")
+
+
+elif page == "Custom Charts":
+
+    st.title("Custom Charts")
+    st.caption("Build your own charts — choose data source, chart type, axes and aggregation.")
+
+    st.markdown("### 1. Data Source")
+
+    source_options = {
+        "Production": production,
+        "Item Registration": items,
+        "Opening Stock": opening,
+        "Production Qty": prod_qty,
+        "Dispatch Qty": dispatch,
+        "Return Qty": return_qty,
+        "Closing Stock": closing,
+    }
+
+    source_name = st.selectbox(
+        "Select a dataset",
+        list(source_options.keys())
+    )
+
+    df = source_options[source_name].copy()
+
+    if df.empty:
+        empty_state(
+            f"{source_name} has no records.",
+            "Add records in that module first, then come back here."
+        )
+        st.stop()
+
+    st.markdown("### 2. Filters (optional)")
+
+    with st.expander("Apply filters", expanded=False):
+        filter_cols = st.multiselect(
+            "Filter by column",
+            options=[c for c in df.columns
+                     if df[c].dtype == "object" or df[c].nunique() < 30],
+            default=[]
+        )
+
+        filtered_df = df.copy()
+
+        for col in filter_cols:
+            unique_vals = df[col].dropna().astype(str).unique().tolist()
+            if not unique_vals:
+                continue
+            picked = st.multiselect(f"Values for {col}", unique_vals,
+                                    default=unique_vals, key=f"filter_{col}")
+            filtered_df = filtered_df[filtered_df[col].astype(str).isin(picked)]
+
+    df = filtered_df
+
+    if df.empty:
+        st.warning("No data left after filters. Change the filters.")
+        st.stop()
+
+    st.markdown("### 3. Chart Configuration")
+
+    numeric_cols = [c for c in df.columns
+                    if pd.api.types.is_numeric_dtype(df[c])]
+    all_cols = df.columns.tolist()
+
+    chart_type = st.selectbox(
+        "Chart Type",
+        [
+            "Bar Chart",
+            "Grouped Bar Chart",
+            "Stacked Bar Chart",
+            "Line Chart",
+            "Area Chart",
+            "Pie Chart",
+            "Donut Chart",
+            "Scatter Plot",
+            "Histogram",
+            "Box Plot",
+        ]
+    )
+
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        x_axis = st.selectbox("X-axis (category / group)", all_cols,
+                              index=(all_cols.index("Item_ID")
+                                     if "Item_ID" in all_cols else 0))
+
+    with c2:
+        y_axis = st.selectbox("Y-axis (numeric)",
+                              numeric_cols if numeric_cols else ["(no numeric column)"])
+
+    with c3:
+        color_by = st.selectbox(
+            "Color / Group by (optional)",
+            ["(none)"] + all_cols,
+            index=0
+        )
+
+    agg_choice = "None"
+    if chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
+        agg_choice = st.selectbox(
+            "Aggregation (when X has multiple rows)",
+            ["sum", "mean", "count", "max", "min"],
+            index=0
+        )
+
+    top_n = st.slider("Show top N categories (0 = all)", 0, 50, 0)
+
+    sort_order = st.radio("Sort order", ["Descending", "Ascending", "None"],
+                          horizontal=True)
+
+    st.markdown("### 4. Chart")
+
+    plot_df = df.copy()
+
+    try:
+        if agg_choice != "None" and chart_type not in ["Histogram", "Scatter Plot", "Box Plot"]:
+            group_cols = [x_axis]
+            if color_by != "(none)" and color_by != x_axis:
+                group_cols.append(color_by)
+
+            if agg_choice == "count":
+                plot_df = (
+                    plot_df.groupby(group_cols)[y_axis]
+                    .count().reset_index()
+                    .rename(columns={y_axis: "count"})
+                )
+                y_plot = "count"
+            else:
+                plot_df = (
+                    plot_df.groupby(group_cols)[y_axis]
+                    .agg(agg_choice).reset_index()
+                )
+                y_plot = y_axis
+        else:
+            y_plot = y_axis
+
+        if agg_choice != "None" and y_plot in plot_df.columns and sort_order != "None":
+            plot_df = plot_df.sort_values(
+                y_plot, ascending=(sort_order == "Ascending")
+            )
+
+        if top_n > 0 and y_plot in plot_df.columns:
+            plot_df = plot_df.head(top_n)
+
+        if chart_type == "Bar Chart":
+            fig = px.bar(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None),
+                         text_auto=True)
+
+        elif chart_type == "Grouped Bar Chart":
+            fig = px.bar(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None),
+                         barmode="group")
+
+        elif chart_type == "Stacked Bar Chart":
+            fig = px.bar(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None),
+                         barmode="stack")
+
+        elif chart_type == "Line Chart":
+            fig = px.line(plot_df, x=x_axis, y=y_plot,
+                          color=(color_by if color_by != "(none)" else None),
+                          markers=True)
+
+        elif chart_type == "Area Chart":
+            fig = px.area(plot_df, x=x_axis, y=y_plot,
+                          color=(color_by if color_by != "(none)" else None))
+
+        elif chart_type == "Pie Chart":
+            fig = px.pie(plot_df, names=x_axis, values=y_plot)
+
+        elif chart_type == "Donut Chart":
+            fig = px.pie(plot_df, names=x_axis, values=y_plot, hole=0.5)
+
+        elif chart_type == "Scatter Plot":
+            fig = px.scatter(plot_df, x=x_axis, y=y_plot,
+                             color=(color_by if color_by != "(none)" else None))
+
+        elif chart_type == "Histogram":
+            fig = px.histogram(plot_df, x=x_axis,
+                               color=(color_by if color_by != "(none)" else None))
+
+        elif chart_type == "Box Plot":
+            fig = px.box(plot_df, x=x_axis, y=y_plot,
+                         color=(color_by if color_by != "(none)" else None))
+        else:
+            fig = None
+
+        if fig is not None:
+            fig.update_layout(
+                margin=dict(l=10, r=10, t=40, b=10),
+                height=520,
+                legend_title_text=(color_by if color_by != "(none)" else "")
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with st.expander("View underlying chart data"):
+            st.dataframe(plot_df, use_container_width=True, hide_index=True)
+            st.caption(f"{len(plot_df)} row(s)")
+
+        csv = plot_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download chart data as CSV",
+            data=csv,
+            file_name=f"custom_chart_{source_name.lower().replace(' ', '_')}.csv",
+            mime="text/csv"
+        )
+
+    except Exception as e:
+        st.error("Error while building the chart.")
+        st.code(str(e))
+        st.info("Try a different X / Y combination, or clear Color / Group by.")
+
+
+elif page == "Data Management":
+
+    st.title("Data Management")
+    st.caption("Live database records and diagnostics.")
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Items", len(items))
+    c2.metric("Production", len(production))
+    c3.metric("Opening", len(opening))
+    c4.metric("Dispatch", len(dispatch))
+    c5.metric("Closing", len(closing))
+
+    c1, c2 = st.columns(2)
+    c1.metric("Production Qty", len(prod_qty))
+    c2.metric("Return Qty", len(return_qty))
+
+    st.markdown("---")
+
+    with st.expander("Table Diagnostics", expanded=False):
+        diag = pd.DataFrame({
+            "Table": [
+                ITEM_TABLE, PRODUCTION_TABLE,
+                OPENING_TABLE, PRODUCTION_QTY_TABLE,
+                DISPATCH_TABLE, RETURN_TABLE, CLOSING_TABLE
+            ],
+            "Rows Loaded": [
+                len(items), len(production),
+                len(opening), len(prod_qty),
+                len(dispatch), len(return_qty), len(closing)
+            ],
+            "Status": [
+                "Error" if items_err else "OK",
+                "Error" if production_err else ("Empty" if production.empty else "OK"),
+                "Error" if opening_err else ("Empty" if opening.empty else "OK"),
+                "Error" if prod_qty_err else ("Empty" if prod_qty.empty else "OK"),
+                "Error" if dispatch_err else ("Empty" if dispatch.empty else "OK"),
+                "Error" if return_err else ("Empty" if return_qty.empty else "OK"),
+                "Error" if closing_err else ("Empty" if closing.empty else "OK"),
+            ],
+            "Error": [
+                items_err or "-",
+                production_err or "-",
+                opening_err or "-",
+                prod_qty_err or "-",
+                dispatch_err or "-",
+                return_err or "-",
+                closing_err or "-"
+            ]
+        })
+        st.dataframe(diag, use_container_width=True, hide_index=True)
+
+        if st.button("Force Reload All Data"):
+            refresh_all()
+
+    st.markdown("---")
+
+    st.subheader("Item Registration")
+    st.dataframe(items, use_container_width=True, hide_index=True)
+
+    st.subheader("Production")
+    st.dataframe(production, use_container_width=True, hide_index=True)
+
+    st.subheader("Opening Stock")
+    st.dataframe(opening, use_container_width=True, hide_index=True)
+
+    st.subheader("Production Qty")
+    st.dataframe(prod_qty, use_container_width=True, hide_index=True)
+
+    st.subheader("Dispatch Qty")
+    st.dataframe(dispatch, use_container_width=True, hide_index=True)
+
+    st.subheader("Return Qty")
+    st.dataframe(return_qty, use_container_width=True, hide_index=True)
+
+    st.subheader("Closing Stock")
+    st.dataframe(closing, use_container_width=True, hide_index=True)
+
+
+st.markdown("---")
+st.caption("Flex Head Industries Pvt Ltd | ERP Management System")            
