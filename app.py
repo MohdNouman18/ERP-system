@@ -16,10 +16,6 @@ st.set_page_config(
 )
 
 
-# =========================================================
-# CONSTANTS
-# =========================================================
-
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
 OPENING_TABLE = "Opening_Stock"
@@ -99,10 +95,6 @@ COMPANY_ADDR_LINE3 = (
 )
 
 
-# =========================================================
-# CSS
-# =========================================================
-
 @st.cache_data(show_spinner=False)
 def _read_css():
     try:
@@ -116,10 +108,6 @@ _css = _read_css()
 if _css:
     st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
 
-
-# =========================================================
-# SUPABASE
-# =========================================================
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client(url: str, key: str) -> Client:
@@ -140,10 +128,6 @@ except Exception as e:
     st.code(str(e))
     st.stop()
 
-
-# =========================================================
-# DATAFRAME HELPERS
-# =========================================================
 
 def _normalize_columns(df, expected):
     if df is None or df.empty:
@@ -175,12 +159,7 @@ def convert_numeric(df, columns):
     return df
 
 
-# =========================================================
-# DATE UTILITIES
-# =========================================================
-
 def fmt_date_only(val):
-    """Convert any date-like value to 'YYYY-MM-DD' (no time)."""
     if val is None:
         return ""
     try:
@@ -189,29 +168,22 @@ def fmt_date_only(val):
     except Exception:
         pass
 
-    # Python date (not datetime) — direct
     if isinstance(val, date) and not isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
-
-    # Python datetime — strip time
     if isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
 
-    # String handling
     if isinstance(val, str):
         s = val.strip()
         if not s:
             return ""
-        # Fast path: already "YYYY-MM-DD"
         if len(s) >= 10 and s[4] == "-" and s[7] == "-":
             return s[:10]
-        # Try parsing
         try:
             return pd.to_datetime(s).strftime("%Y-%m-%d")
         except Exception:
             return s
 
-    # Pandas Timestamp or other
     try:
         return pd.to_datetime(val).strftime("%Y-%m-%d")
     except Exception:
@@ -219,7 +191,6 @@ def fmt_date_only(val):
 
 
 def date_str(d):
-    """Convert Python date object to 'YYYY-MM-DD' string."""
     if isinstance(d, datetime):
         return d.strftime("%Y-%m-%d")
     if isinstance(d, date):
@@ -228,13 +199,8 @@ def date_str(d):
 
 
 def today_str():
-    """Today's date as 'YYYY-MM-DD'."""
     return date.today().strftime("%Y-%m-%d")
 
-
-# =========================================================
-# DATA LOADING
-# =========================================================
 
 def _fetch_raw(table_name):
     try:
@@ -296,10 +262,6 @@ def load_all_data():
 ) = load_all_data()
 
 
-# =========================================================
-# ID GENERATION
-# =========================================================
-
 def get_next_id(df, id_col, prefix):
     if df.empty or id_col not in df.columns:
         return f"{prefix}-001"
@@ -336,10 +298,6 @@ def next_challan_no(df, kind="DC"):
         return f"{prefix}001"
     return f"{prefix}{max(nums) + 1:03d}"
 
-
-# =========================================================
-# STOCK LEDGER
-# =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def compute_stock_ledger(items_df, opening_df, prod_qty_df,
@@ -403,10 +361,6 @@ TOTALS = compute_totals(production, opening, prod_qty, dispatch,
                         return_qty, adjustment, STOCK_LEDGER)
 
 
-# =========================================================
-# UTILITIES
-# =========================================================
-
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_item_options(items_df):
     if items_df.empty:
@@ -462,10 +416,6 @@ def empty_state(msg, cta=None):
     )
 
 
-# =========================================================
-# LOGO
-# =========================================================
-
 @st.cache_data(show_spinner=False)
 def get_logo_base64():
     for path in ["logo.png", "logo.jpg", "logo.jpeg"]:
@@ -485,10 +435,11 @@ LOGO_B64 = get_logo_base64()
 
 
 def logo_html():
+    """Logo markup — MEDIUM size (130px), left aligned."""
     if LOGO_B64:
-        return f'<img src="{LOGO_B64}" style="width:120px;height:auto;display:block;margin:0 auto;" alt="Logo"/>'
+        return f'<img src="{LOGO_B64}" style="width:130px;height:auto;display:block;" alt="Logo"/>'
     return """<svg viewBox="0 0 100 80" xmlns="http://www.w3.org/2000/svg"
-                style="width:120px;height:auto;display:block;margin:0 auto;">
+                style="width:130px;height:auto;display:block;">
         <g fill="#000">
             <path d="M5 55 L25 25 L40 25 L20 55 Z"/>
             <path d="M30 60 L50 20 L65 20 L45 60 Z"/>
@@ -497,21 +448,11 @@ def logo_html():
     </svg>"""
 
 
-# =========================================================
-# CHALLAN HTML BUILDER — centered letterhead + footer values
-# =========================================================
-
 def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
     challan_no = header_row.get("challan_no", "") or ""
     challan_date = fmt_date_only(header_row.get("challan_date", ""))
     sent_to = header_row.get("sent_to", "") or ""
 
-    # Footer values (from DB)
-    vehicle_no_val = str(header_row.get("vehicle_no", "") or "")
-    received_by_val = str(header_row.get("received_by", "") or "")
-    sent_by_val = str(header_row.get("sent_by", "") or "")
-
-    # Trim nan-like strings
     def _clean(v):
         if v is None:
             return ""
@@ -520,11 +461,10 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
             return ""
         return s
 
-    vehicle_no_val = _clean(vehicle_no_val)
-    received_by_val = _clean(received_by_val)
-    sent_by_val = _clean(sent_by_val)
+    vehicle_no_val = _clean(header_row.get("vehicle_no", ""))
+    received_by_val = _clean(header_row.get("received_by", ""))
+    sent_by_val = _clean(header_row.get("sent_by", ""))
 
-    # Build rows
     rows_html = ""
     MIN_ROWS = 15
     count = 0
@@ -568,12 +508,14 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 .challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
 padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
 
-/* ---- CENTERED HEADER ---- */
-.challan-page .hdr-center{{text-align:center;margin-bottom:10px;
-padding-bottom:12px;border-bottom:2px solid #000;}}
-.challan-page .logo-center{{text-align:center;margin-bottom:8px;}}
+/* ---- LEFT-SIDE LOGO HEADER ---- */
+.challan-page .hdr-flex{{display:flex;align-items:center;gap:16px;
+margin-bottom:10px;padding-bottom:12px;border-bottom:2px solid #000;}}
+.challan-page .logo-left{{width:130px;flex-shrink:0;text-align:left;}}
+.challan-page .logo-left img{{width:130px;height:auto;display:block;}}
+.challan-page .company-info{{flex:1;text-align:left;}}
 .challan-page .cname{{font-size:24px;font-weight:900;letter-spacing:1px;
-margin:8px 0 6px 0;color:#000;}}
+margin:0 0 6px 0;color:#000;}}
 .challan-page .caddr{{font-size:10px;line-height:1.55;color:#000;}}
 .challan-page .caddr-line{{margin:1px 0;}}
 
@@ -615,13 +557,15 @@ padding-top:5px;font-weight:900;}}
 }}
 </style>
 
-<div class="hdr-center">
-  <div class="logo-center">{logo_markup}</div>
-  <div class="cname">{COMPANY_NAME}</div>
-  <div class="caddr">
-    <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
-    <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
-    <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
+<div class="hdr-flex">
+  <div class="logo-left">{logo_markup}</div>
+  <div class="company-info">
+    <div class="cname">{COMPANY_NAME}</div>
+    <div class="caddr">
+      <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
+      <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
+      <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
+    </div>
   </div>
 </div>
 
@@ -691,10 +635,6 @@ def render_challan_png(html_content, output_filename="challan.png"):
         return None
     return None
 
-
-# =========================================================
-# GENERIC STOCK CRUD
-# =========================================================
 
 def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
@@ -814,10 +754,6 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.code(str(e))
 
 
-# =========================================================
-# CHALLAN ITEMS EDITOR (unlimited rows)
-# =========================================================
-
 def challan_items_editor(key_prefix):
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
@@ -924,10 +860,6 @@ def reset_challan_rows(key_prefix):
     st.session_state[counter_key] = 1
 
 
-# =========================================================
-# CHALLAN MODULE
-# =========================================================
-
 def render_challan_module(
     page_title, challan_table, challan_items_table,
     challan_df, challan_items_df,
@@ -946,7 +878,6 @@ def render_challan_module(
         "View / Print", "Create", "Update / Delete", "Manage Items"
     ])
 
-    # ---- VIEW / PRINT ----
     with tab1:
         if challan_df.empty:
             st.info(f"No {page_title.lower()} records yet.")
@@ -1088,7 +1019,6 @@ def render_challan_module(
                         key=f"pngdl_{widget_key_suffix}_{picked_no}"
                     )
 
-    # ---- CREATE ----
     with tab2:
         next_no = next_challan_no(challan_df, challan_no_prefix)
         st.info(f"Next Challan No: {next_no}")
@@ -1150,7 +1080,6 @@ def render_challan_module(
                         h = rls_hint(str(e), challan_table, "insert")
                         if h: st.info(h)
 
-    # ---- UPDATE / DELETE ----
     with tab3:
         if challan_df.empty:
             st.info("No challans.")
@@ -1216,7 +1145,6 @@ def render_challan_module(
                     st.error("Delete failed.")
                     st.code(str(e))
 
-    # ---- MANAGE ITEMS ----
     with tab4:
         if challan_df.empty:
             st.info("No challans.")
@@ -1343,10 +1271,6 @@ def render_challan_module(
                         st.code(str(e))
 
 
-# =========================================================
-# SIDEBAR
-# =========================================================
-
 with st.sidebar:
     if os.path.exists("logo.png"):
         st.image("logo.png", use_container_width=True)
@@ -1396,10 +1320,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
-# =========================================================
-# EXECUTIVE DASHBOARD
-# =========================================================
 
 if page == "Executive Dashboard":
     st.title("Executive Dashboard")
