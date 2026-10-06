@@ -1,6 +1,6 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 
 import pandas as pd
 import plotly.express as px
@@ -15,6 +15,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+# =========================================================
+# CONSTANTS
+# =========================================================
 
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
@@ -95,6 +99,10 @@ COMPANY_ADDR_LINE3 = (
 )
 
 
+# =========================================================
+# CSS
+# =========================================================
+
 @st.cache_data(show_spinner=False)
 def _read_css():
     try:
@@ -108,6 +116,10 @@ _css = _read_css()
 if _css:
     st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
 
+
+# =========================================================
+# SUPABASE
+# =========================================================
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client(url: str, key: str) -> Client:
@@ -128,6 +140,10 @@ except Exception as e:
     st.code(str(e))
     st.stop()
 
+
+# =========================================================
+# DATAFRAME HELPERS
+# =========================================================
 
 def _normalize_columns(df, expected):
     if df is None or df.empty:
@@ -158,6 +174,67 @@ def convert_numeric(df, columns):
         df[present] = df[present].apply(pd.to_numeric, errors="coerce").fillna(0)
     return df
 
+
+# =========================================================
+# DATE UTILITIES
+# =========================================================
+
+def fmt_date_only(val):
+    """Convert any date-like value to 'YYYY-MM-DD' (no time)."""
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except Exception:
+        pass
+
+    # Python date (not datetime) — direct
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val.strftime("%Y-%m-%d")
+
+    # Python datetime — strip time
+    if isinstance(val, datetime):
+        return val.strftime("%Y-%m-%d")
+
+    # String handling
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return ""
+        # Fast path: already "YYYY-MM-DD"
+        if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+            return s[:10]
+        # Try parsing
+        try:
+            return pd.to_datetime(s).strftime("%Y-%m-%d")
+        except Exception:
+            return s
+
+    # Pandas Timestamp or other
+    try:
+        return pd.to_datetime(val).strftime("%Y-%m-%d")
+    except Exception:
+        return str(val)
+
+
+def date_str(d):
+    """Convert Python date object to 'YYYY-MM-DD' string."""
+    if isinstance(d, datetime):
+        return d.strftime("%Y-%m-%d")
+    if isinstance(d, date):
+        return d.strftime("%Y-%m-%d")
+    return fmt_date_only(d)
+
+
+def today_str():
+    """Today's date as 'YYYY-MM-DD'."""
+    return date.today().strftime("%Y-%m-%d")
+
+
+# =========================================================
+# DATA LOADING
+# =========================================================
 
 def _fetch_raw(table_name):
     try:
@@ -219,6 +296,10 @@ def load_all_data():
 ) = load_all_data()
 
 
+# =========================================================
+# ID GENERATION
+# =========================================================
+
 def get_next_id(df, id_col, prefix):
     if df.empty or id_col not in df.columns:
         return f"{prefix}-001"
@@ -255,6 +336,10 @@ def next_challan_no(df, kind="DC"):
         return f"{prefix}001"
     return f"{prefix}{max(nums) + 1:03d}"
 
+
+# =========================================================
+# STOCK LEDGER
+# =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def compute_stock_ledger(items_df, opening_df, prod_qty_df,
@@ -318,6 +403,10 @@ TOTALS = compute_totals(production, opening, prod_qty, dispatch,
                         return_qty, adjustment, STOCK_LEDGER)
 
 
+# =========================================================
+# UTILITIES
+# =========================================================
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_item_options(items_df):
     if items_df.empty:
@@ -352,7 +441,7 @@ def rls_hint(err, table, action="insert"):
     if "column" in e and "does not exist" in e:
         return f"Column mismatch on {table}."
     if "duplicate key" in e or "unique constraint" in e:
-        return f"Duplicate ID in {table}."
+        return f"Duplicate ID in {table}. Refresh and try again."
     if "foreign key" in e:
         return f"Foreign key violation on {table}."
     return None
@@ -372,6 +461,10 @@ def empty_state(msg, cta=None):
         unsafe_allow_html=True
     )
 
+
+# =========================================================
+# LOGO
+# =========================================================
 
 @st.cache_data(show_spinner=False)
 def get_logo_base64():
@@ -393,9 +486,9 @@ LOGO_B64 = get_logo_base64()
 
 def logo_html():
     if LOGO_B64:
-        return f'<img src="{LOGO_B64}" style="width:100px;height:auto;" alt="Logo"/>'
+        return f'<img src="{LOGO_B64}" style="width:120px;height:auto;display:block;margin:0 auto;" alt="Logo"/>'
     return """<svg viewBox="0 0 100 80" xmlns="http://www.w3.org/2000/svg"
-                style="width:100px;height:auto;">
+                style="width:120px;height:auto;display:block;margin:0 auto;">
         <g fill="#000">
             <path d="M5 55 L25 25 L40 25 L20 55 Z"/>
             <path d="M30 60 L50 20 L65 20 L45 60 Z"/>
@@ -405,14 +498,33 @@ def logo_html():
 
 
 # =========================================================
-# CHALLAN HTML BUILDER
+# CHALLAN HTML BUILDER — centered letterhead + footer values
 # =========================================================
 
 def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
-    challan_no = header_row.get("challan_no", "")
-    challan_date = header_row.get("challan_date", "")
-    sent_to = header_row.get("sent_to", "")
+    challan_no = header_row.get("challan_no", "") or ""
+    challan_date = fmt_date_only(header_row.get("challan_date", ""))
+    sent_to = header_row.get("sent_to", "") or ""
 
+    # Footer values (from DB)
+    vehicle_no_val = str(header_row.get("vehicle_no", "") or "")
+    received_by_val = str(header_row.get("received_by", "") or "")
+    sent_by_val = str(header_row.get("sent_by", "") or "")
+
+    # Trim nan-like strings
+    def _clean(v):
+        if v is None:
+            return ""
+        s = str(v).strip()
+        if s.lower() in ("nan", "none", "null"):
+            return ""
+        return s
+
+    vehicle_no_val = _clean(vehicle_no_val)
+    received_by_val = _clean(received_by_val)
+    sent_by_val = _clean(sent_by_val)
+
+    # Build rows
     rows_html = ""
     MIN_ROWS = 15
     count = 0
@@ -440,33 +552,61 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 
     logo_markup = logo_html()
 
+    def _sig_block(label, value):
+        val_display = value if value else "&nbsp;"
+        return f"""
+        <div class="sig">
+          <div class="sig-value">{val_display}</div>
+          <div class="sig-line"></div>
+          <div class="sig-label">{label}</div>
+        </div>
+        """
+
     return f"""
 <div id="challan-print" class="challan-page">
 <style>
 .challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
-padding:18px 22px;max-width:900px;margin:0 auto;font-size:12px;}}
-.challan-page .hdr{{display:flex;align-items:center;gap:14px;margin-bottom:10px;}}
-.challan-page .logo-box{{width:110px;flex-shrink:0;text-align:center;}}
-.challan-page .company-info{{flex:1;text-align:left;}}
-.challan-page .cname{{font-size:23px;font-weight:900;line-height:1.15;
-letter-spacing:0.5px;}}
-.challan-page .caddr{{font-size:9.5px;line-height:1.45;margin-top:5px;}}
+padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
+
+/* ---- CENTERED HEADER ---- */
+.challan-page .hdr-center{{text-align:center;margin-bottom:10px;
+padding-bottom:12px;border-bottom:2px solid #000;}}
+.challan-page .logo-center{{text-align:center;margin-bottom:8px;}}
+.challan-page .cname{{font-size:24px;font-weight:900;letter-spacing:1px;
+margin:8px 0 6px 0;color:#000;}}
+.challan-page .caddr{{font-size:10px;line-height:1.55;color:#000;}}
+.challan-page .caddr-line{{margin:1px 0;}}
+
+/* ---- META ROW ---- */
 .challan-page .meta-row{{display:flex;justify-content:space-between;
-font-size:12px;margin:12px 0 8px 0;gap:20px;padding:6px 0;
+font-size:12px;margin:12px 0 10px 0;gap:20px;padding:8px 0;
 border-top:1px solid #000;border-bottom:1px solid #000;}}
 .challan-page .meta-row b{{font-weight:900;}}
+.challan-page .meta-row span{{font-weight:400;}}
+
+/* ---- TITLE BAR ---- */
 .challan-page .bar{{background:#000;color:#fff;text-align:center;
-font-weight:900;font-size:18px;letter-spacing:3px;padding:9px 0;margin:8px 0 10px 0;}}
+font-weight:900;font-size:18px;letter-spacing:3px;padding:10px 0;
+margin:8px 0 12px 0;}}
+
+/* ---- TABLE ---- */
 .challan-page table{{width:100%;border-collapse:collapse;font-size:11px;}}
 .challan-page th,.challan-page td{{border:1px solid #000;padding:6px 8px;
 vertical-align:middle;height:22px;}}
 .challan-page th{{background:#f2f2f2;font-weight:900;text-transform:uppercase;
 font-size:12px;padding:8px;text-align:center;}}
 .challan-page td.c{{text-align:center;}}
+
+/* ---- FOOTER ---- */
 .challan-page .ftr{{display:flex;justify-content:space-between;
-margin-top:50px;font-size:11px;font-weight:900;}}
-.challan-page .sig{{width:28%;text-align:center;border-top:1.5px solid #000;
-padding-top:4px;text-transform:uppercase;letter-spacing:0.5px;}}
+margin-top:60px;font-size:11px;font-weight:900;gap:20px;}}
+.challan-page .sig{{width:30%;text-align:center;}}
+.challan-page .sig-value{{min-height:22px;font-size:12px;
+font-weight:700;margin-bottom:6px;color:#000;padding-top:6px;}}
+.challan-page .sig-line{{border-top:1.5px solid #000;margin:0 auto;width:100%;}}
+.challan-page .sig-label{{text-transform:uppercase;letter-spacing:0.5px;
+padding-top:5px;font-weight:900;}}
+
 @media print{{
   body *{{visibility:hidden;}}
   #challan-print, #challan-print *{{visibility:visible;}}
@@ -475,22 +615,20 @@ padding-top:4px;text-transform:uppercase;letter-spacing:0.5px;}}
 }}
 </style>
 
-<div class="hdr">
-  <div class="logo-box">{logo_markup}</div>
-  <div class="company-info">
-    <div class="cname">{COMPANY_NAME}</div>
-    <div class="caddr">
-      {COMPANY_ADDR_LINE1}<br>
-      {COMPANY_ADDR_LINE2}<br>
-      {COMPANY_ADDR_LINE3}
-    </div>
+<div class="hdr-center">
+  <div class="logo-center">{logo_markup}</div>
+  <div class="cname">{COMPANY_NAME}</div>
+  <div class="caddr">
+    <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
+    <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
+    <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
   </div>
 </div>
 
 <div class="meta-row">
-  <div><b>Challan No:</b> {challan_no}</div>
-  <div><b>Date:</b> {challan_date}</div>
-  <div><b>Sent To:</b> {sent_to}</div>
+  <div><b>Challan No:</b> <span>{challan_no}</span></div>
+  <div><b>Date:</b> <span>{challan_date}</span></div>
+  <div><b>Sent To:</b> <span>{sent_to}</span></div>
 </div>
 
 <div class="bar">{challan_title}</div>
@@ -508,9 +646,9 @@ padding-top:4px;text-transform:uppercase;letter-spacing:0.5px;}}
 </table>
 
 <div class="ftr">
-  <div class="sig">Vehicle No</div>
-  <div class="sig">Received By</div>
-  <div class="sig">Sent By</div>
+  {_sig_block("Vehicle No", vehicle_no_val)}
+  {_sig_block("Received By", received_by_val)}
+  {_sig_block("Sent By", sent_by_val)}
 </div>
 </div>
 """
@@ -555,7 +693,7 @@ def render_challan_png(html_content, output_filename="challan.png"):
 
 
 # =========================================================
-# GENERIC CRUD
+# GENERIC STOCK CRUD
 # =========================================================
 
 def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
@@ -568,6 +706,9 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
         search = st.text_input(f"Search {label}", key=f"s_{table_name}",
                                placeholder=f"{id_col}, Item ID...")
         display = filter_df(df, search)
+        if "Entry_Date" in display.columns:
+            display = display.copy()
+            display["Entry_Date"] = display["Entry_Date"].apply(fmt_date_only)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
 
@@ -598,13 +739,15 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                         id_col: next_id,
                         "Item_ID": selected_item,
                         "Qty": qty,
-                        "Entry_Date": str(entry_date)
+                        "Entry_Date": date_str(entry_date)
                     }).execute()
                     st.success(f"{label} {next_id} added.")
                     refresh_all()
                 except Exception as e:
                     st.error(f"{label} add failed.")
                     st.code(str(e))
+                    h = rls_hint(str(e), table_name, "insert")
+                    if h: st.info(h)
 
     with tab3:
         if df.empty:
@@ -651,7 +794,7 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
             try:
                 supabase.table(table_name).update({
                     "Item_ID": edit_item, "Qty": edit_qty,
-                    "Entry_Date": str(edit_date)
+                    "Entry_Date": date_str(edit_date)
                 }).eq(id_col, selected_id).execute()
                 st.success(f"{label} updated.")
                 refresh_all()
@@ -672,14 +815,10 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
 
 
 # =========================================================
-# UNLIMITED ITEMS INPUT — session state based
+# CHALLAN ITEMS EDITOR (unlimited rows)
 # =========================================================
 
 def challan_items_editor(key_prefix):
-    """
-    Returns list of item-row dicts.
-    Uses session_state to allow unlimited add/remove rows.
-    """
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -693,18 +832,12 @@ def challan_items_editor(key_prefix):
     item_options = get_item_options(items)
     rows = st.session_state[state_key]
 
-    # Render header
     hc1, hc2, hc3, hc4, hc5 = st.columns([0.5, 2, 4, 2, 2])
-    with hc1:
-        st.markdown("**#**")
-    with hc2:
-        st.markdown("**Item ID**")
-    with hc3:
-        st.markdown("**Description**")
-    with hc4:
-        st.markdown("**Qty**")
-    with hc5:
-        st.markdown("**Unit**")
+    with hc1: st.markdown("**#**")
+    with hc2: st.markdown("**Item ID**")
+    with hc3: st.markdown("**Description**")
+    with hc4: st.markdown("**Qty**")
+    with hc5: st.markdown("**Unit**")
 
     to_remove = None
 
@@ -989,7 +1122,7 @@ def render_challan_module(
                     try:
                         hdr = {
                             "challan_no": next_no,
-                            "challan_date": str(challan_date),
+                            "challan_date": date_str(challan_date),
                             "sent_to": sent_to.strip(),
                             "vehicle_no": vehicle_no.strip() or None,
                             "received_by": received_by.strip() or None,
@@ -1014,6 +1147,8 @@ def render_challan_module(
                     except Exception as e:
                         st.error("Failed.")
                         st.code(str(e))
+                        h = rls_hint(str(e), challan_table, "insert")
+                        if h: st.info(h)
 
     # ---- UPDATE / DELETE ----
     with tab3:
@@ -1031,7 +1166,12 @@ def render_challan_module(
             with st.form(f"upd_{widget_key_suffix}_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    d = pd.to_datetime(selected["challan_date"]).date() if pd.notna(selected["challan_date"]) else date.today()
+                    d = date.today()
+                    if pd.notna(selected["challan_date"]):
+                        try:
+                            d = pd.to_datetime(selected["challan_date"]).date()
+                        except Exception:
+                            d = date.today()
                     ed = st.date_input("Challan Date", value=d,
                                        key=f"ed_{widget_key_suffix}")
                     et = st.text_input("Sent To",
@@ -1053,7 +1193,8 @@ def render_challan_module(
             if upd:
                 try:
                     supabase.table(challan_table).update({
-                        "challan_date": str(ed), "sent_to": et.strip(),
+                        "challan_date": date_str(ed),
+                        "sent_to": et.strip(),
                         "vehicle_no": ev.strip() or None,
                         "received_by": er.strip() or None,
                         "sent_by": es.strip() or None
@@ -1469,6 +1610,9 @@ elif page == "Production":
         search = st.text_input("Search Production",
                                placeholder="Production ID, Item ID, Batch...")
         display = filter_df(production, search)
+        if "Production_Date" in display.columns:
+            display = display.copy()
+            display["Production_Date"] = display["Production_Date"].apply(fmt_date_only)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
 
@@ -1505,7 +1649,7 @@ elif page == "Production":
                     supabase.table(PRODUCTION_TABLE).insert({
                         "Production_ID": next_production_id,
                         "Item_ID": selected_item,
-                        "Production_Date": str(production_date),
+                        "Production_Date": date_str(production_date),
                         "Batch_No": batch_no.strip(),
                         "Production_Line": production_line,
                         "Planned_Qty_m": planned_qty,
@@ -1608,7 +1752,7 @@ elif page == "Stock Control":
         st.markdown("### Closing Stock")
         if not STOCK_LEDGER.empty:
             ledger_view = STOCK_LEDGER.copy()
-            ledger_view["Auto_Date"] = str(date.today())
+            ledger_view["Auto_Date"] = today_str()
             st.dataframe(ledger_view, use_container_width=True, hide_index=True)
         else:
             empty_state("No stock data available yet.")
@@ -1626,6 +1770,9 @@ elif page == "Stock Adjustment":
         search = st.text_input("Search Adjustment",
                                placeholder="Adjustment ID, Item ID, Reason...")
         display = filter_df(adjustment, search)
+        if "Adjustment_Date" in display.columns:
+            display = display.copy()
+            display["Adjustment_Date"] = display["Adjustment_Date"].apply(fmt_date_only)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
 
@@ -1654,7 +1801,7 @@ elif page == "Stock Adjustment":
                     supabase.table(ADJUSTMENT_TABLE).insert({
                         "Adjustment_ID": next_adj_id,
                         "Item_ID": selected_item,
-                        "Adjustment_Date": str(adj_date),
+                        "Adjustment_Date": date_str(adj_date),
                         "Qty": qty,
                         "Reason": reason,
                         "Remarks": remarks.strip()
@@ -1679,13 +1826,18 @@ elif page == "Stock Adjustment":
             ci = str(selected["Item_ID"]) if pd.notna(selected["Item_ID"]) else ""
             di = options.index(ci) if ci in options else 0
 
+            current_adj_date = date.today()
+            if pd.notna(selected["Adjustment_Date"]):
+                try:
+                    current_adj_date = pd.to_datetime(selected["Adjustment_Date"]).date()
+                except Exception:
+                    pass
+
             with st.form("update_adjustment_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     ei = st.selectbox("Item ID", options, index=di) if options else ci
-                    ed = st.date_input("Adjustment Date",
-                        value=pd.to_datetime(selected["Adjustment_Date"]).date()
-                        if pd.notna(selected["Adjustment_Date"]) else date.today())
+                    ed = st.date_input("Adjustment Date", value=current_adj_date)
                 with c2:
                     eq = st.number_input("Quantity",
                         value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
@@ -1702,7 +1854,7 @@ elif page == "Stock Adjustment":
             if update:
                 try:
                     supabase.table(ADJUSTMENT_TABLE).update({
-                        "Item_ID": ei, "Adjustment_Date": str(ed),
+                        "Item_ID": ei, "Adjustment_Date": date_str(ed),
                         "Qty": eq, "Reason": er, "Remarks": em.strip()
                     }).eq("Adjustment_ID", selected_id).execute()
                     st.success("Updated.")
@@ -1784,7 +1936,7 @@ elif page == "Physical Check":
             new_id = next_id_for(ADJUSTMENT_TABLE, current_adj_df)
             payload = {
                 "Adjustment_ID": new_id, "Item_ID": iid,
-                "Adjustment_Date": str(today), "Qty": diff,
+                "Adjustment_Date": date_str(today), "Qty": diff,
                 "Reason": "Physical Check",
                 "Remarks": f"System {sc:.0f} vs Physical {ph:.0f}"
             }
