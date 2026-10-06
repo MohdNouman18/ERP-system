@@ -16,10 +16,6 @@ st.set_page_config(
 )
 
 
-# =========================================================
-# CONSTANTS
-# =========================================================
-
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
 OPENING_TABLE = "Opening_Stock"
@@ -99,10 +95,6 @@ COMPANY_ADDR_LINE3 = (
 )
 
 
-# =========================================================
-# CSS
-# =========================================================
-
 @st.cache_data(show_spinner=False)
 def _read_css():
     try:
@@ -116,10 +108,6 @@ _css = _read_css()
 if _css:
     st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
 
-
-# =========================================================
-# SUPABASE
-# =========================================================
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client(url: str, key: str) -> Client:
@@ -140,10 +128,6 @@ except Exception as e:
     st.code(str(e))
     st.stop()
 
-
-# =========================================================
-# DATAFRAME HELPERS
-# =========================================================
 
 def _normalize_columns(df, expected):
     if df is None or df.empty:
@@ -174,10 +158,6 @@ def convert_numeric(df, columns):
         df[present] = df[present].apply(pd.to_numeric, errors="coerce").fillna(0)
     return df
 
-
-# =========================================================
-# DATA LOADING
-# =========================================================
 
 def _fetch_raw(table_name):
     try:
@@ -239,10 +219,6 @@ def load_all_data():
 ) = load_all_data()
 
 
-# =========================================================
-# ID GENERATION
-# =========================================================
-
 def get_next_id(df, id_col, prefix):
     if df.empty or id_col not in df.columns:
         return f"{prefix}-001"
@@ -279,10 +255,6 @@ def next_challan_no(df, kind="DC"):
         return f"{prefix}001"
     return f"{prefix}{max(nums) + 1:03d}"
 
-
-# =========================================================
-# STOCK LEDGER
-# =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def compute_stock_ledger(items_df, opening_df, prod_qty_df,
@@ -346,10 +318,6 @@ TOTALS = compute_totals(production, opening, prod_qty, dispatch,
                         return_qty, adjustment, STOCK_LEDGER)
 
 
-# =========================================================
-# UTILITIES
-# =========================================================
-
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_item_options(items_df):
     if items_df.empty:
@@ -405,10 +373,6 @@ def empty_state(msg, cta=None):
     )
 
 
-# =========================================================
-# LOGO — read as base64 for embedding in HTML
-# =========================================================
-
 @st.cache_data(show_spinner=False)
 def get_logo_base64():
     for path in ["logo.png", "logo.jpg", "logo.jpeg"]:
@@ -428,12 +392,10 @@ LOGO_B64 = get_logo_base64()
 
 
 def logo_html():
-    """Return the logo <img> if available, else SVG fallback."""
     if LOGO_B64:
-        return f'<img src="{LOGO_B64}" style="width:90px;height:auto;" alt="Logo"/>'
-    # SVG fallback (three slanted bars)
+        return f'<img src="{LOGO_B64}" style="width:100px;height:auto;" alt="Logo"/>'
     return """<svg viewBox="0 0 100 80" xmlns="http://www.w3.org/2000/svg"
-                style="width:90px;height:auto;">
+                style="width:100px;height:auto;">
         <g fill="#000">
             <path d="M5 55 L25 25 L40 25 L20 55 Z"/>
             <path d="M30 60 L50 20 L65 20 L45 60 Z"/>
@@ -443,7 +405,7 @@ def logo_html():
 
 
 # =========================================================
-# CHALLAN HTML BUILDER — with letterhead + logo + print/PDF
+# CHALLAN HTML BUILDER
 # =========================================================
 
 def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
@@ -483,18 +445,18 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 <style>
 .challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
 padding:18px 22px;max-width:900px;margin:0 auto;font-size:12px;}}
-.challan-page .hdr{{display:flex;align-items:center;gap:14px;margin-bottom:10px;
-border-bottom:2px solid #000;padding-bottom:10px;}}
-.challan-page .logo-box{{width:100px;flex-shrink:0;text-align:center;}}
-.challan-page .company-info{{flex:1;text-align:center;padding-right:100px;}}
-.challan-page .cname{{font-size:22px;font-weight:900;line-height:1.15;
+.challan-page .hdr{{display:flex;align-items:center;gap:14px;margin-bottom:10px;}}
+.challan-page .logo-box{{width:110px;flex-shrink:0;text-align:center;}}
+.challan-page .company-info{{flex:1;text-align:left;}}
+.challan-page .cname{{font-size:23px;font-weight:900;line-height:1.15;
 letter-spacing:0.5px;}}
-.challan-page .caddr{{font-size:9.5px;line-height:1.4;margin-top:5px;}}
+.challan-page .caddr{{font-size:9.5px;line-height:1.45;margin-top:5px;}}
+.challan-page .meta-row{{display:flex;justify-content:space-between;
+font-size:12px;margin:12px 0 8px 0;gap:20px;padding:6px 0;
+border-top:1px solid #000;border-bottom:1px solid #000;}}
+.challan-page .meta-row b{{font-weight:900;}}
 .challan-page .bar{{background:#000;color:#fff;text-align:center;
-font-weight:900;font-size:18px;letter-spacing:3px;padding:9px 0;margin:14px 0 10px 0;}}
-.challan-page .meta{{display:flex;justify-content:space-between;
-font-size:11px;margin-bottom:8px;gap:20px;}}
-.challan-page .meta b{{font-weight:700;}}
+font-weight:900;font-size:18px;letter-spacing:3px;padding:9px 0;margin:8px 0 10px 0;}}
 .challan-page table{{width:100%;border-collapse:collapse;font-size:11px;}}
 .challan-page th,.challan-page td{{border:1px solid #000;padding:6px 8px;
 vertical-align:middle;height:22px;}}
@@ -525,13 +487,13 @@ padding-top:4px;text-transform:uppercase;letter-spacing:0.5px;}}
   </div>
 </div>
 
-<div class="bar">{challan_title}</div>
-
-<div class="meta">
+<div class="meta-row">
   <div><b>Challan No:</b> {challan_no}</div>
   <div><b>Date:</b> {challan_date}</div>
   <div><b>Sent To:</b> {sent_to}</div>
 </div>
+
+<div class="bar">{challan_title}</div>
 
 <table>
   <thead>
@@ -555,13 +517,9 @@ padding-top:4px;text-transform:uppercase;letter-spacing:0.5px;}}
 
 
 def build_printable_html_page(challan_html):
-    """Wrap challan HTML in a full standalone HTML page with auto-print button."""
     return f"""<!DOCTYPE html>
 <html>
-<head>
-<meta charset="utf-8">
-<title>Challan</title>
-</head>
+<head><meta charset="utf-8"><title>Challan</title></head>
 <body style="margin:0;background:#f5f5f5;">
 <div style="text-align:center;padding:14px;background:#222;">
   <button onclick="window.print()"
@@ -570,9 +528,6 @@ def build_printable_html_page(challan_html):
            cursor:pointer;">
     Print / Save as PDF
   </button>
-  <div style="color:#ccc;font-size:12px;margin-top:6px;">
-    Print dialog mein "Save as PDF" choose karo
-  </div>
 </div>
 <div style="padding:20px;">
 {challan_html}
@@ -600,14 +555,12 @@ def render_challan_png(html_content, output_filename="challan.png"):
 
 
 # =========================================================
-# GENERIC CRUD (stock tables with Entry_Date)
+# GENERIC CRUD
 # =========================================================
 
 def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
         st.error(f"Failed to load {label}: {load_error}")
-        h = rls_hint(load_error, table_name, "select")
-        if h: st.info(h)
 
     tab1, tab2, tab3 = st.tabs([f"View {label}", f"Add {label}", "Update / Delete"])
 
@@ -719,7 +672,127 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
 
 
 # =========================================================
-# REUSABLE CHALLAN MODULE
+# UNLIMITED ITEMS INPUT — session state based
+# =========================================================
+
+def challan_items_editor(key_prefix):
+    """
+    Returns list of item-row dicts.
+    Uses session_state to allow unlimited add/remove rows.
+    """
+    state_key = f"{key_prefix}_rows"
+    counter_key = f"{key_prefix}_counter"
+
+    if state_key not in st.session_state:
+        st.session_state[state_key] = [
+            {"id": 1, "item_id": "(none)", "description": "",
+             "quantity": 0.0, "unit": "Meter"}
+        ]
+        st.session_state[counter_key] = 1
+
+    item_options = get_item_options(items)
+    rows = st.session_state[state_key]
+
+    # Render header
+    hc1, hc2, hc3, hc4, hc5 = st.columns([0.5, 2, 4, 2, 2])
+    with hc1:
+        st.markdown("**#**")
+    with hc2:
+        st.markdown("**Item ID**")
+    with hc3:
+        st.markdown("**Description**")
+    with hc4:
+        st.markdown("**Qty**")
+    with hc5:
+        st.markdown("**Unit**")
+
+    to_remove = None
+
+    for idx, row in enumerate(rows):
+        rid = row["id"]
+        c1, c2, c3, c4, c5 = st.columns([0.5, 2, 4, 2, 2])
+
+        with c1:
+            st.markdown(f"**{idx + 1}**")
+
+        with c2:
+            if item_options:
+                opts = ["(none)"] + item_options
+                cur = row.get("item_id", "(none)")
+                pos = opts.index(cur) if cur in opts else 0
+                row["item_id"] = st.selectbox(
+                    "Item ID", opts, index=pos,
+                    key=f"{key_prefix}_item_{rid}",
+                    label_visibility="collapsed"
+                )
+            else:
+                row["item_id"] = st.text_input(
+                    "Item ID", value=row.get("item_id", ""),
+                    key=f"{key_prefix}_itemtxt_{rid}",
+                    label_visibility="collapsed"
+                )
+
+        with c3:
+            row["description"] = st.text_input(
+                "Description", value=row.get("description", ""),
+                key=f"{key_prefix}_desc_{rid}",
+                label_visibility="collapsed"
+            )
+
+        with c4:
+            row["quantity"] = st.number_input(
+                "Qty", min_value=0.0,
+                value=float(row.get("quantity", 0.0)),
+                step=1.0,
+                key=f"{key_prefix}_qty_{rid}",
+                label_visibility="collapsed"
+            )
+
+        with c5:
+            c5a, c5b = st.columns([3, 1])
+            with c5a:
+                row["unit"] = st.text_input(
+                    "Unit", value=row.get("unit", "Meter"),
+                    key=f"{key_prefix}_unit_{rid}",
+                    label_visibility="collapsed"
+                )
+            with c5b:
+                if st.button("✖", key=f"{key_prefix}_rm_{rid}",
+                             help="Remove row"):
+                    to_remove = idx
+
+    if to_remove is not None:
+        st.session_state[state_key].pop(to_remove)
+        st.rerun()
+
+    bc1, bc2 = st.columns([1, 5])
+    with bc1:
+        if st.button("+ Add Row", key=f"{key_prefix}_add"):
+            st.session_state[counter_key] += 1
+            st.session_state[state_key].append({
+                "id": st.session_state[counter_key],
+                "item_id": "(none)",
+                "description": "",
+                "quantity": 0.0,
+                "unit": "Meter"
+            })
+            st.rerun()
+
+    return st.session_state[state_key]
+
+
+def reset_challan_rows(key_prefix):
+    state_key = f"{key_prefix}_rows"
+    counter_key = f"{key_prefix}_counter"
+    st.session_state[state_key] = [
+        {"id": 1, "item_id": "(none)", "description": "",
+         "quantity": 0.0, "unit": "Meter"}
+    ]
+    st.session_state[counter_key] = 1
+
+
+# =========================================================
+# CHALLAN MODULE
 # =========================================================
 
 def render_challan_module(
@@ -745,7 +818,6 @@ def render_challan_module(
         if challan_df.empty:
             st.info(f"No {page_title.lower()} records yet.")
         else:
-            # ------ Search + Sort controls ------
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
                 search = st.text_input(
@@ -767,12 +839,9 @@ def render_challan_module(
                 )
 
             display = challan_df.copy()
-
-            # Apply search
             if search:
                 display = filter_df(display, search)
 
-            # Apply sort
             sort_col = None
             if sort_by == "Challan Date":
                 sort_col = "challan_date"
@@ -796,7 +865,6 @@ def render_challan_module(
                     pass
 
             st.caption(f"{len(display)} challan(s) found")
-
             if display.empty:
                 st.warning("No challans match the search.")
                 st.stop()
@@ -818,7 +886,7 @@ def render_challan_module(
             html = build_challan_html(picked_row, items_for, challan_title)
 
             st.markdown("---")
-            st.markdown("#### Live Preview")
+            st.markdown("#### Preview")
             st.markdown(
                 f'<div style="border:1px solid #ddd; padding:10px; '
                 f'background:#fff; border-radius:6px; overflow-x:auto;">{html}</div>',
@@ -826,7 +894,7 @@ def render_challan_module(
             )
 
             st.markdown("---")
-            st.markdown("#### Download / Print")
+            st.markdown("#### Download")
 
             c1, c2, c3, c4, c5 = st.columns(5)
 
@@ -852,7 +920,6 @@ def render_challan_module(
                     )
 
             with c3:
-                # Download a print-ready HTML that auto-opens print dialog
                 printable = build_printable_html_page(html)
                 st.download_button(
                     "PDF (Print)",
@@ -874,10 +941,7 @@ def render_challan_module(
                             ] = png
                             st.success("PNG ready!")
                         else:
-                            st.warning(
-                                "PNG rendering unavailable on this environment. "
-                                "Use PDF (Print) button instead."
-                            )
+                            st.warning("PNG rendering unavailable. Use PDF (Print).")
 
             with c5:
                 png_key = f"png_data_{widget_key_suffix}_{picked_no}"
@@ -891,76 +955,36 @@ def render_challan_module(
                         key=f"pngdl_{widget_key_suffix}_{picked_no}"
                     )
 
-            st.info(
-                "**PDF Download kaise karein:** 'PDF (Print)' button dabao → "
-                "HTML file download hogi → double-click karke browser mein kholo → "
-                "'Print / Save as PDF' button click karo → PDF save ho jayegi. "
-                "Ya file kholte hi Ctrl+P (Cmd+P) dabao."
-            )
-
     # ---- CREATE ----
     with tab2:
         next_no = next_challan_no(challan_df, challan_no_prefix)
         st.info(f"Next Challan No: {next_no}")
 
-        with st.form(f"create_{widget_key_suffix}_form"):
-            st.markdown("#### Header")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                challan_date = st.date_input("Challan Date", value=date.today(),
-                                             key=f"cd_{widget_key_suffix}")
-                sent_to = st.text_input("Sent To", key=f"ct_{widget_key_suffix}")
-            with c2:
-                vehicle_no = st.text_input("Vehicle No", key=f"cv_{widget_key_suffix}")
-                received_by = st.text_input("Received By", key=f"cr_{widget_key_suffix}")
-            with c3:
-                sent_by = st.text_input("Sent By", key=f"cs_{widget_key_suffix}")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            challan_date = st.date_input("Challan Date", value=date.today(),
+                                         key=f"cd_{widget_key_suffix}")
+            sent_to = st.text_input("Sent To", key=f"ct_{widget_key_suffix}")
+        with c2:
+            vehicle_no = st.text_input("Vehicle No", key=f"cv_{widget_key_suffix}")
+            received_by = st.text_input("Received By", key=f"cr_{widget_key_suffix}")
+        with c3:
+            sent_by = st.text_input("Sent By", key=f"cs_{widget_key_suffix}")
 
-            st.markdown("---")
-            st.markdown("#### Items")
-            num_rows = st.slider("Number of rows", 1, 15, 5,
-                                 key=f"cn_{widget_key_suffix}")
+        st.markdown("---")
+        st.markdown("#### Items")
+        item_rows = challan_items_editor(f"create_{widget_key_suffix}")
 
-            item_rows = []
-            item_options = get_item_options(items)
-
-            for i in range(num_rows):
-                st.markdown(f"**Item #{i + 1}**")
-                c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
-                with c1:
-                    if item_options:
-                        sel_item = st.selectbox("Item ID",
-                            ["(none)"] + item_options,
-                            key=f"{widget_key_suffix}_ci_{i}")
-                    else:
-                        sel_item = st.text_input("Item ID",
-                            key=f"{widget_key_suffix}_cit_{i}")
-                with c2:
-                    desc = st.text_input("Description",
-                        key=f"{widget_key_suffix}_cd_{i}",
-                        placeholder="e.g. PE Pipe 20mm")
-                with c3:
-                    qty = st.number_input("Qty", min_value=0.0, value=0.0,
-                                          step=1.0,
-                                          key=f"{widget_key_suffix}_cq_{i}")
-                with c4:
-                    unit = st.text_input("Unit", value="Meter",
-                                         key=f"{widget_key_suffix}_cu_{i}")
-                item_rows.append({
-                    "item_id": sel_item, "description": desc.strip(),
-                    "quantity": qty, "unit": unit.strip()
-                })
-
-            submit = st.form_submit_button("Create Challan", type="primary")
-
-        if submit:
+        st.markdown("---")
+        if st.button("Create Challan", type="primary",
+                     key=f"create_btn_{widget_key_suffix}"):
             if not sent_to.strip():
                 st.error("Sent To required.")
             else:
                 valid = [r for r in item_rows
-                         if r["description"] and r["quantity"] > 0]
+                         if r["description"].strip() and r["quantity"] > 0]
                 if not valid:
-                    st.error("At least one item row required.")
+                    st.error("At least one valid item row required.")
                 else:
                     try:
                         hdr = {
@@ -979,12 +1003,13 @@ def render_challan_module(
                                 payloads.append({
                                     "challan_id": cid, "sr_no": idx,
                                     "item_id": r["item_id"] if r["item_id"] != "(none)" else None,
-                                    "description": r["description"],
+                                    "description": r["description"].strip(),
                                     "quantity": r["quantity"],
-                                    "unit": r["unit"] or "Meter"
+                                    "unit": (r["unit"] or "Meter").strip()
                                 })
                             supabase.table(challan_items_table).insert(payloads).execute()
                             st.success(f"Challan {next_no} created with {len(valid)} item(s).")
+                            reset_challan_rows(f"create_{widget_key_suffix}")
                             refresh_all()
                     except Exception as e:
                         st.error("Failed.")
@@ -1236,7 +1261,6 @@ st.markdown(
 # =========================================================
 
 if page == "Executive Dashboard":
-
     st.title("Executive Dashboard")
     t = TOTALS
 
@@ -1318,12 +1342,7 @@ if page == "Executive Dashboard":
         empty_state("No ledger data available.")
 
 
-# =========================================================
-# ITEM REGISTRATION
-# =========================================================
-
 elif page == "Item Registration":
-
     st.title("Item Registration")
 
     if items_err:
@@ -1438,12 +1457,7 @@ elif page == "Item Registration":
                     st.code(str(e))
 
 
-# =========================================================
-# PRODUCTION
-# =========================================================
-
 elif page == "Production":
-
     st.title("Production")
 
     if production_err:
@@ -1566,12 +1580,7 @@ elif page == "Production":
                     st.code(str(e))
 
 
-# =========================================================
-# STOCK CONTROL
-# =========================================================
-
 elif page == "Stock Control":
-
     st.title("Stock Control")
 
     stock_tabs = st.tabs([
@@ -1605,12 +1614,7 @@ elif page == "Stock Control":
             empty_state("No stock data available yet.")
 
 
-# =========================================================
-# STOCK ADJUSTMENT
-# =========================================================
-
 elif page == "Stock Adjustment":
-
     st.title("Stock Adjustment")
 
     if adjustment_err:
@@ -1718,12 +1722,7 @@ elif page == "Stock Adjustment":
                     st.code(str(e))
 
 
-# =========================================================
-# PHYSICAL CHECK
-# =========================================================
-
 elif page == "Physical Check":
-
     st.title("Physical Check")
 
     if STOCK_LEDGER.empty:
@@ -1808,10 +1807,6 @@ elif page == "Physical Check":
             refresh_all()
 
 
-# =========================================================
-# DELIVERY CHALLAN
-# =========================================================
-
 elif page == "Delivery Challan":
     render_challan_module(
         page_title="Delivery Challan",
@@ -1826,10 +1821,6 @@ elif page == "Delivery Challan":
         widget_key_suffix="dc"
     )
 
-
-# =========================================================
-# RETURN CHALLAN
-# =========================================================
 
 elif page == "Return Challan":
     render_challan_module(
@@ -1846,12 +1837,7 @@ elif page == "Return Challan":
     )
 
 
-# =========================================================
-# ANALYTICS
-# =========================================================
-
 elif page == "Analytics":
-
     st.title("Analytics")
 
     st.subheader("Production Performance")
@@ -1884,12 +1870,7 @@ elif page == "Analytics":
         empty_state("No stock data.")
 
 
-# =========================================================
-# CUSTOM CHARTS
-# =========================================================
-
 elif page == "Custom Charts":
-
     st.title("Custom Charts")
 
     sources = {
@@ -2015,12 +1996,7 @@ elif page == "Custom Charts":
         st.code(str(e))
 
 
-# =========================================================
-# DATA MANAGEMENT
-# =========================================================
-
 elif page == "Data Management":
-
     st.title("Data Management")
 
     c1, c2, c3, c4 = st.columns(4)
@@ -2046,20 +2022,6 @@ elif page == "Data Management":
                 len(closing), len(adjustment),
                 len(challans), len(challan_items),
                 len(return_challans), len(return_challan_items),
-            ],
-            "Status": [
-                "Error" if items_err else "OK",
-                "Error" if production_err else ("Empty" if production.empty else "OK"),
-                "Error" if opening_err else ("Empty" if opening.empty else "OK"),
-                "Error" if prod_qty_err else ("Empty" if prod_qty.empty else "OK"),
-                "Error" if dispatch_err else ("Empty" if dispatch.empty else "OK"),
-                "Error" if return_err else ("Empty" if return_qty.empty else "OK"),
-                "Error" if closing_err else ("Empty" if closing.empty else "OK"),
-                "Error" if adjustment_err else ("Empty" if adjustment.empty else "OK"),
-                "Error" if challans_err else ("Empty" if challans.empty else "OK"),
-                "Error" if challan_items_err else ("Empty" if challan_items.empty else "OK"),
-                "Error" if return_challans_err else ("Empty" if return_challans.empty else "OK"),
-                "Error" if return_challan_items_err else ("Empty" if return_challan_items.empty else "OK"),
             ],
         })
         st.dataframe(diag, use_container_width=True, hide_index=True)
