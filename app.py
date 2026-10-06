@@ -260,38 +260,73 @@ def load_all_data():
 
 
 # =========================================================
-# ITEM LOOKUP MAP — for auto-fill description
+# ITEM LOOKUP — Full auto description
 # =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_item_lookup(items_df):
-    """Returns dict: Item_ID -> full description string."""
+    """
+    Returns dict: Item_ID -> full auto description string.
+    Format: Material Grade | Application | Dia mm | WT X mm | SDR X | Color
+    """
     if items_df.empty:
         return {}
     lookup = {}
     for _, row in items_df.iterrows():
-        iid = str(row.get("Item_ID", "") or "")
+        iid = str(row.get("Item_ID", "") or "").strip()
         if not iid:
             continue
+
         parts = []
+
+        # Material Grade
         mg = row.get("Material_Grade")
         if pd.notna(mg) and str(mg).strip():
             parts.append(str(mg).strip())
+
+        # Application
         app = row.get("Application")
         if pd.notna(app) and str(app).strip():
             parts.append(str(app).strip())
+
+        # Nominal Diameter
         dia = row.get("Nominal_Diameter_mm")
-        if pd.notna(dia) and float(dia) > 0:
-            parts.append(f"{int(float(dia))} mm")
+        try:
+            d_val = float(dia) if pd.notna(dia) else 0.0
+        except Exception:
+            d_val = 0.0
+        if d_val > 0:
+            if d_val == int(d_val):
+                parts.append(f"{int(d_val)} mm")
+            else:
+                parts.append(f"{d_val:g} mm")
+
+        # Wall Thickness
         wall = row.get("Wall_Thickness_mm")
-        if pd.notna(wall) and float(wall) > 0:
-            parts.append(f"WT {float(wall):g} mm")
+        try:
+            w_val = float(wall) if pd.notna(wall) else 0.0
+        except Exception:
+            w_val = 0.0
+        if w_val > 0:
+            if w_val == int(w_val):
+                parts.append(f"WT {int(w_val)} mm")
+            else:
+                parts.append(f"WT {w_val:g} mm")
+
+        # SDR
         sdr = row.get("SDR")
         if pd.notna(sdr) and str(sdr).strip():
-            parts.append(f"SDR {str(sdr).strip()}")
+            sdr_str = str(sdr).strip()
+            if sdr_str.upper().startswith("SDR"):
+                parts.append(sdr_str)
+            else:
+                parts.append(f"SDR {sdr_str}")
+
+        # Color
         col = row.get("Color")
         if pd.notna(col) and str(col).strip():
             parts.append(str(col).strip())
+
         lookup[iid] = " | ".join(parts)
     return lookup
 
@@ -798,11 +833,10 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
 
 
 # =========================================================
-# CHALLAN ITEMS EDITOR — auto-fill description on Item select
+# CHALLAN ITEMS EDITOR — Full auto-fill description
 # =========================================================
 
 def challan_items_editor(key_prefix):
-    """Session-state based unlimited rows. Description auto-fills on Item_ID change."""
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -842,8 +876,8 @@ def challan_items_editor(key_prefix):
                     key=f"{key_prefix}_item_{rid}",
                     label_visibility="collapsed"
                 )
-                # Auto-fill description when Item changes
-                if new_val != row.get("item_id", "(none)"):
+                # Auto-fill description whenever Item changes
+                if new_val != cur:
                     row["item_id"] = new_val
                     row["description"] = auto_description(new_val)
                     st.rerun()
@@ -857,7 +891,6 @@ def challan_items_editor(key_prefix):
                 )
 
         with c3:
-            # Auto-populated but editable
             row["description"] = st.text_input(
                 "Description", value=row.get("description", ""),
                 key=f"{key_prefix}_desc_{rid}",
@@ -939,13 +972,12 @@ def render_challan_module(
     ])
 
     # =====================================================
-    # VIEW / PRINT — sidebar list, right side PDF print
+    # VIEW / PRINT
     # =====================================================
     with tab1:
         if challan_df.empty:
             st.info(f"No {page_title.lower()} records yet.")
         else:
-            # Sorting controls (outside sidebar list)
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
                 search = st.text_input(
@@ -970,7 +1002,6 @@ def render_challan_module(
             if search:
                 display = filter_df(display, search)
 
-            # Determine sort column
             sort_col = None
             if sort_by == "Challan Date":
                 sort_col = "challan_date"
@@ -997,14 +1028,12 @@ def render_challan_module(
                 st.warning("No challans match the search.")
                 st.stop()
 
-            # Layout: left = list, right = PDF print button
             left_col, right_col = st.columns([1, 1.6])
 
             with left_col:
                 st.markdown(f"#### {len(display)} Challan(s)")
                 st.caption("Select from list:")
 
-                # Build list label with date and challan_no
                 options_display = []
                 id_map = {}
                 for _, row in display.iterrows():
@@ -1031,7 +1060,6 @@ def render_challan_module(
                     challan_items_df["challan_id"] == picked_id
                 ].sort_values("sr_no")
 
-                # Small info summary
                 st.markdown("---")
                 st.markdown(
                     f"**Challan No:** {picked_row.get('challan_no', '')}  \n"
@@ -1081,12 +1109,6 @@ def render_challan_module(
                         key=f"dlc_{widget_key_suffix}_{picked_id}"
                     )
 
-                st.info(
-                    "**PDF Download:** PDF (Print) button dabao → HTML file download hogi → "
-                    "browser mein kholo → print button click karo → Save as PDF."
-                )
-
-                # Show items table (compact)
                 if not items_for.empty:
                     st.markdown("#### Items")
                     st.dataframe(
@@ -1118,7 +1140,6 @@ def render_challan_module(
 
         st.markdown("---")
         st.markdown("#### Items")
-        st.caption("Item ID select karte hi Description auto-fill ho jayega (editable).")
         item_rows = challan_items_editor(f"create_{widget_key_suffix}")
 
         st.markdown("---")
@@ -1272,8 +1293,11 @@ def render_challan_module(
                             key=f"add_cit_{widget_key_suffix}")
                 with c2:
                     auto_desc = auto_description(ni) if ni != "(none)" else ""
-                    nd = st.text_input("Description", value=auto_desc,
-                        key=f"add_cd_{widget_key_suffix}")
+                    nd = st.text_input(
+                        "Description",
+                        value=auto_desc,
+                        key=f"add_cd_{widget_key_suffix}_{ni}"
+                    )
                 with c3:
                     nq = st.number_input("Qty", min_value=0.0, value=0.0,
                                          step=1.0,
