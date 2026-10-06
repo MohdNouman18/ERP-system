@@ -167,12 +167,10 @@ def fmt_date_only(val):
             return ""
     except Exception:
         pass
-
     if isinstance(val, date) and not isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
     if isinstance(val, datetime):
         return val.strftime("%Y-%m-%d")
-
     if isinstance(val, str):
         s = val.strip()
         if not s:
@@ -183,7 +181,6 @@ def fmt_date_only(val):
             return pd.to_datetime(s).strftime("%Y-%m-%d")
         except Exception:
             return s
-
     try:
         return pd.to_datetime(val).strftime("%Y-%m-%d")
     except Exception:
@@ -260,6 +257,53 @@ def load_all_data():
     challans_err, challan_items_err,
     return_challans_err, return_challan_items_err
 ) = load_all_data()
+
+
+# =========================================================
+# ITEM LOOKUP MAP — for auto-fill description
+# =========================================================
+
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def build_item_lookup(items_df):
+    """Returns dict: Item_ID -> full description string."""
+    if items_df.empty:
+        return {}
+    lookup = {}
+    for _, row in items_df.iterrows():
+        iid = str(row.get("Item_ID", "") or "")
+        if not iid:
+            continue
+        parts = []
+        mg = row.get("Material_Grade")
+        if pd.notna(mg) and str(mg).strip():
+            parts.append(str(mg).strip())
+        app = row.get("Application")
+        if pd.notna(app) and str(app).strip():
+            parts.append(str(app).strip())
+        dia = row.get("Nominal_Diameter_mm")
+        if pd.notna(dia) and float(dia) > 0:
+            parts.append(f"{int(float(dia))} mm")
+        wall = row.get("Wall_Thickness_mm")
+        if pd.notna(wall) and float(wall) > 0:
+            parts.append(f"WT {float(wall):g} mm")
+        sdr = row.get("SDR")
+        if pd.notna(sdr) and str(sdr).strip():
+            parts.append(f"SDR {str(sdr).strip()}")
+        col = row.get("Color")
+        if pd.notna(col) and str(col).strip():
+            parts.append(str(col).strip())
+        lookup[iid] = " | ".join(parts)
+    return lookup
+
+
+ITEM_LOOKUP = build_item_lookup(items)
+
+
+def auto_description(item_id):
+    """Return auto-generated description for an Item_ID."""
+    if not item_id or item_id == "(none)":
+        return ""
+    return ITEM_LOOKUP.get(str(item_id), "")
 
 
 def get_next_id(df, id_col, prefix):
@@ -373,6 +417,7 @@ def refresh_all():
     get_item_options.clear()
     compute_stock_ledger.clear()
     compute_totals.clear()
+    build_item_lookup.clear()
     st.rerun()
 
 
@@ -435,7 +480,6 @@ LOGO_B64 = get_logo_base64()
 
 
 def logo_html():
-    """Logo markup — MEDIUM size (130px), left aligned."""
     if LOGO_B64:
         return f'<img src="{LOGO_B64}" style="width:130px;height:auto;display:block;" alt="Logo"/>'
     return """<svg viewBox="0 0 100 80" xmlns="http://www.w3.org/2000/svg"
@@ -447,6 +491,10 @@ def logo_html():
         </g>
     </svg>"""
 
+
+# =========================================================
+# CHALLAN HTML BUILDER
+# =========================================================
 
 def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
     challan_no = header_row.get("challan_no", "") or ""
@@ -508,7 +556,6 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 .challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
 padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
 
-/* ---- LEFT-SIDE LOGO HEADER ---- */
 .challan-page .hdr-flex{{display:flex;align-items:center;gap:16px;
 margin-bottom:10px;padding-bottom:12px;border-bottom:2px solid #000;}}
 .challan-page .logo-left{{width:130px;flex-shrink:0;text-align:left;}}
@@ -519,19 +566,16 @@ margin:0 0 6px 0;color:#000;}}
 .challan-page .caddr{{font-size:10px;line-height:1.55;color:#000;}}
 .challan-page .caddr-line{{margin:1px 0;}}
 
-/* ---- META ROW ---- */
 .challan-page .meta-row{{display:flex;justify-content:space-between;
 font-size:12px;margin:12px 0 10px 0;gap:20px;padding:8px 0;
 border-top:1px solid #000;border-bottom:1px solid #000;}}
 .challan-page .meta-row b{{font-weight:900;}}
 .challan-page .meta-row span{{font-weight:400;}}
 
-/* ---- TITLE BAR ---- */
 .challan-page .bar{{background:#000;color:#fff;text-align:center;
 font-weight:900;font-size:18px;letter-spacing:3px;padding:10px 0;
 margin:8px 0 12px 0;}}
 
-/* ---- TABLE ---- */
 .challan-page table{{width:100%;border-collapse:collapse;font-size:11px;}}
 .challan-page th,.challan-page td{{border:1px solid #000;padding:6px 8px;
 vertical-align:middle;height:22px;}}
@@ -539,7 +583,6 @@ vertical-align:middle;height:22px;}}
 font-size:12px;padding:8px;text-align:center;}}
 .challan-page td.c{{text-align:center;}}
 
-/* ---- FOOTER ---- */
 .challan-page .ftr{{display:flex;justify-content:space-between;
 margin-top:60px;font-size:11px;font-weight:900;gap:20px;}}
 .challan-page .sig{{width:30%;text-align:center;}}
@@ -572,7 +615,7 @@ padding-top:5px;font-weight:900;}}
 <div class="meta-row">
   <div><b>Challan No:</b> <span>{challan_no}</span></div>
   <div><b>Date:</b> <span>{challan_date}</span></div>
-  <div><b>Sent To:</b> <span>{sent_to}</span></div>
+  <div><b>Site/Location:</b> <span>{sent_to}</span></div>
 </div>
 
 <div class="bar">{challan_title}</div>
@@ -591,8 +634,8 @@ padding-top:5px;font-weight:900;}}
 
 <div class="ftr">
   {_sig_block("Vehicle No", vehicle_no_val)}
-  {_sig_block("Received By", received_by_val)}
-  {_sig_block("Sent By", sent_by_val)}
+  {_sig_block("Customer Name", received_by_val)}
+  {_sig_block("Dispatched By", sent_by_val)}
 </div>
 </div>
 """
@@ -754,7 +797,12 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.code(str(e))
 
 
+# =========================================================
+# CHALLAN ITEMS EDITOR — auto-fill description on Item select
+# =========================================================
+
 def challan_items_editor(key_prefix):
+    """Session-state based unlimited rows. Description auto-fills on Item_ID change."""
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -771,7 +819,7 @@ def challan_items_editor(key_prefix):
     hc1, hc2, hc3, hc4, hc5 = st.columns([0.5, 2, 4, 2, 2])
     with hc1: st.markdown("**#**")
     with hc2: st.markdown("**Item ID**")
-    with hc3: st.markdown("**Description**")
+    with hc3: st.markdown("**Description (auto)**")
     with hc4: st.markdown("**Qty**")
     with hc5: st.markdown("**Unit**")
 
@@ -789,11 +837,18 @@ def challan_items_editor(key_prefix):
                 opts = ["(none)"] + item_options
                 cur = row.get("item_id", "(none)")
                 pos = opts.index(cur) if cur in opts else 0
-                row["item_id"] = st.selectbox(
+                new_val = st.selectbox(
                     "Item ID", opts, index=pos,
                     key=f"{key_prefix}_item_{rid}",
                     label_visibility="collapsed"
                 )
+                # Auto-fill description when Item changes
+                if new_val != row.get("item_id", "(none)"):
+                    row["item_id"] = new_val
+                    row["description"] = auto_description(new_val)
+                    st.rerun()
+                else:
+                    row["item_id"] = new_val
             else:
                 row["item_id"] = st.text_input(
                     "Item ID", value=row.get("item_id", ""),
@@ -802,6 +857,7 @@ def challan_items_editor(key_prefix):
                 )
 
         with c3:
+            # Auto-populated but editable
             row["description"] = st.text_input(
                 "Description", value=row.get("description", ""),
                 key=f"{key_prefix}_desc_{rid}",
@@ -860,6 +916,10 @@ def reset_challan_rows(key_prefix):
     st.session_state[counter_key] = 1
 
 
+# =========================================================
+# CHALLAN MODULE — sidebar list + right PDF print
+# =========================================================
+
 def render_challan_module(
     page_title, challan_table, challan_items_table,
     challan_df, challan_items_df,
@@ -878,21 +938,25 @@ def render_challan_module(
         "View / Print", "Create", "Update / Delete", "Manage Items"
     ])
 
+    # =====================================================
+    # VIEW / PRINT — sidebar list, right side PDF print
+    # =====================================================
     with tab1:
         if challan_df.empty:
             st.info(f"No {page_title.lower()} records yet.")
         else:
+            # Sorting controls (outside sidebar list)
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
                 search = st.text_input(
                     "Search",
-                    placeholder="Challan No, Sent To, Vehicle No...",
+                    placeholder="Challan No, Site/Location, Vehicle...",
                     key=f"search_{widget_key_suffix}"
                 )
             with c2:
                 sort_by = st.selectbox(
                     "Sort by",
-                    ["Challan Date", "Challan No", "Challan ID"],
+                    ["Challan Date", "Challan ID", "Challan No"],
                     key=f"sortby_{widget_key_suffix}"
                 )
             with c3:
@@ -906,13 +970,14 @@ def render_challan_module(
             if search:
                 display = filter_df(display, search)
 
+            # Determine sort column
             sort_col = None
             if sort_by == "Challan Date":
                 sort_col = "challan_date"
-            elif sort_by == "Challan No":
-                sort_col = "challan_no"
             elif sort_by == "Challan ID":
                 sort_col = "challan_id"
+            elif sort_by == "Challan No":
+                sort_col = "challan_no"
 
             if sort_col and sort_col in display.columns:
                 try:
@@ -928,97 +993,110 @@ def render_challan_module(
                 except Exception:
                     pass
 
-            st.caption(f"{len(display)} challan(s) found")
             if display.empty:
                 st.warning("No challans match the search.")
                 st.stop()
 
-            picked_no = st.selectbox(
-                "Select Challan",
-                display["challan_no"].astype(str).tolist(),
-                key=f"pick_{widget_key_suffix}"
-            )
-            picked_row = display.loc[
-                display["challan_no"].astype(str) == picked_no
-            ].iloc[0]
-            picked_id = picked_row["challan_id"]
+            # Layout: left = list, right = PDF print button
+            left_col, right_col = st.columns([1, 1.6])
 
-            items_for = challan_items_df[
-                challan_items_df["challan_id"] == picked_id
-            ].sort_values("sr_no")
+            with left_col:
+                st.markdown(f"#### {len(display)} Challan(s)")
+                st.caption("Select from list:")
 
-            html = build_challan_html(picked_row, items_for, challan_title)
+                # Build list label with date and challan_no
+                options_display = []
+                id_map = {}
+                for _, row in display.iterrows():
+                    no = str(row.get("challan_no", ""))
+                    d = fmt_date_only(row.get("challan_date", ""))
+                    cid = row.get("challan_id")
+                    label = f"{no}  •  {d}"
+                    options_display.append(label)
+                    id_map[label] = cid
 
-            st.markdown("---")
-            st.markdown("#### Preview")
-            st.markdown(
-                f'<div style="border:1px solid #ddd; padding:10px; '
-                f'background:#fff; border-radius:6px; overflow-x:auto;">{html}</div>',
-                unsafe_allow_html=True
-            )
+                picked_label = st.radio(
+                    "Challans",
+                    options_display,
+                    key=f"pick_{widget_key_suffix}",
+                    label_visibility="collapsed"
+                )
+                picked_id = id_map.get(picked_label)
 
-            st.markdown("---")
-            st.markdown("#### Download")
+                picked_row = display.loc[
+                    display["challan_id"] == picked_id
+                ].iloc[0]
 
-            c1, c2, c3, c4, c5 = st.columns(5)
+                items_for = challan_items_df[
+                    challan_items_df["challan_id"] == picked_id
+                ].sort_values("sr_no")
 
-            with c1:
-                st.download_button(
-                    "HTML",
-                    data=html.encode("utf-8"),
-                    file_name=f"{picked_no}.html",
-                    mime="text/html",
-                    use_container_width=True,
-                    key=f"dlh_{widget_key_suffix}_{picked_no}"
+                # Small info summary
+                st.markdown("---")
+                st.markdown(
+                    f"**Challan No:** {picked_row.get('challan_no', '')}  \n"
+                    f"**Date:** {fmt_date_only(picked_row.get('challan_date', ''))}  \n"
+                    f"**Site/Location:** {picked_row.get('sent_to', '')}  \n"
+                    f"**Customer Name:** {picked_row.get('received_by', '')}  \n"
+                    f"**Dispatched By:** {picked_row.get('sent_by', '')}  \n"
+                    f"**Vehicle No:** {picked_row.get('vehicle_no', '')}  \n"
+                    f"**Items:** {len(items_for)}"
                 )
 
-            with c2:
+            with right_col:
+                st.markdown("#### Print / Download")
+
+                html = build_challan_html(picked_row, items_for, challan_title)
+
+                c1, c2 = st.columns(2)
+
+                with c1:
+                    printable = build_printable_html_page(html)
+                    st.download_button(
+                        "PDF (Print)",
+                        data=printable.encode("utf-8"),
+                        file_name=f"{picked_row.get('challan_no', 'challan')}_print.html",
+                        mime="text/html",
+                        use_container_width=True,
+                        key=f"pdf_{widget_key_suffix}_{picked_id}"
+                    )
+
+                with c2:
+                    st.download_button(
+                        "HTML",
+                        data=html.encode("utf-8"),
+                        file_name=f"{picked_row.get('challan_no', 'challan')}.html",
+                        mime="text/html",
+                        use_container_width=True,
+                        key=f"dlh_{widget_key_suffix}_{picked_id}"
+                    )
+
                 if not items_for.empty:
                     st.download_button(
-                        "CSV",
+                        "CSV (Items)",
                         data=items_for.to_csv(index=False).encode("utf-8"),
-                        file_name=f"{picked_no}_items.csv",
+                        file_name=f"{picked_row.get('challan_no', 'challan')}_items.csv",
                         mime="text/csv",
                         use_container_width=True,
-                        key=f"dlc_{widget_key_suffix}_{picked_no}"
+                        key=f"dlc_{widget_key_suffix}_{picked_id}"
                     )
 
-            with c3:
-                printable = build_printable_html_page(html)
-                st.download_button(
-                    "PDF (Print)",
-                    data=printable.encode("utf-8"),
-                    file_name=f"{picked_no}_print.html",
-                    mime="text/html",
-                    use_container_width=True,
-                    key=f"pdf_{widget_key_suffix}_{picked_no}"
+                st.info(
+                    "**PDF Download:** PDF (Print) button dabao → HTML file download hogi → "
+                    "browser mein kholo → print button click karo → Save as PDF."
                 )
 
-            with c4:
-                if st.button("PNG", use_container_width=True,
-                             key=f"png_btn_{widget_key_suffix}_{picked_no}"):
-                    with st.spinner("Rendering..."):
-                        png = render_challan_png(html, f"{picked_no}.png")
-                        if png:
-                            st.session_state[
-                                f"png_data_{widget_key_suffix}_{picked_no}"
-                            ] = png
-                            st.success("PNG ready!")
-                        else:
-                            st.warning("PNG rendering unavailable. Use PDF (Print).")
-
-            with c5:
-                png_key = f"png_data_{widget_key_suffix}_{picked_no}"
-                if png_key in st.session_state:
-                    st.download_button(
-                        "Save PNG",
-                        data=st.session_state[png_key],
-                        file_name=f"{picked_no}.png",
-                        mime="image/png",
-                        use_container_width=True,
-                        key=f"pngdl_{widget_key_suffix}_{picked_no}"
+                # Show items table (compact)
+                if not items_for.empty:
+                    st.markdown("#### Items")
+                    st.dataframe(
+                        items_for[["sr_no", "item_id", "description", "quantity", "unit"]],
+                        use_container_width=True, hide_index=True
                     )
 
+    # =====================================================
+    # CREATE
+    # =====================================================
     with tab2:
         next_no = next_challan_no(challan_df, challan_no_prefix)
         st.info(f"Next Challan No: {next_no}")
@@ -1027,22 +1105,27 @@ def render_challan_module(
         with c1:
             challan_date = st.date_input("Challan Date", value=date.today(),
                                          key=f"cd_{widget_key_suffix}")
-            sent_to = st.text_input("Sent To", key=f"ct_{widget_key_suffix}")
+            sent_to = st.text_input("Site/Location",
+                                     key=f"ct_{widget_key_suffix}")
         with c2:
-            vehicle_no = st.text_input("Vehicle No", key=f"cv_{widget_key_suffix}")
-            received_by = st.text_input("Received By", key=f"cr_{widget_key_suffix}")
+            vehicle_no = st.text_input("Vehicle No",
+                                        key=f"cv_{widget_key_suffix}")
+            received_by = st.text_input("Customer Name",
+                                         key=f"cr_{widget_key_suffix}")
         with c3:
-            sent_by = st.text_input("Sent By", key=f"cs_{widget_key_suffix}")
+            sent_by = st.text_input("Dispatched By",
+                                     key=f"cs_{widget_key_suffix}")
 
         st.markdown("---")
         st.markdown("#### Items")
+        st.caption("Item ID select karte hi Description auto-fill ho jayega (editable).")
         item_rows = challan_items_editor(f"create_{widget_key_suffix}")
 
         st.markdown("---")
         if st.button("Create Challan", type="primary",
                      key=f"create_btn_{widget_key_suffix}"):
             if not sent_to.strip():
-                st.error("Sent To required.")
+                st.error("Site/Location required.")
             else:
                 valid = [r for r in item_rows
                          if r["description"].strip() and r["quantity"] > 0]
@@ -1080,6 +1163,9 @@ def render_challan_module(
                         h = rls_hint(str(e), challan_table, "insert")
                         if h: st.info(h)
 
+    # =====================================================
+    # UPDATE / DELETE
+    # =====================================================
     with tab3:
         if challan_df.empty:
             st.info("No challans.")
@@ -1103,18 +1189,18 @@ def render_challan_module(
                             d = date.today()
                     ed = st.date_input("Challan Date", value=d,
                                        key=f"ed_{widget_key_suffix}")
-                    et = st.text_input("Sent To",
+                    et = st.text_input("Site/Location",
                         value=str(selected["sent_to"]) if pd.notna(selected["sent_to"]) else "",
                         key=f"et_{widget_key_suffix}")
                 with c2:
                     ev = st.text_input("Vehicle No",
                         value=str(selected["vehicle_no"]) if pd.notna(selected["vehicle_no"]) else "",
                         key=f"ev_{widget_key_suffix}")
-                    er = st.text_input("Received By",
+                    er = st.text_input("Customer Name",
                         value=str(selected["received_by"]) if pd.notna(selected["received_by"]) else "",
                         key=f"er_{widget_key_suffix}")
                 with c3:
-                    es = st.text_input("Sent By",
+                    es = st.text_input("Dispatched By",
                         value=str(selected["sent_by"]) if pd.notna(selected["sent_by"]) else "",
                         key=f"es_{widget_key_suffix}")
                 upd = st.form_submit_button("Update Header", type="primary")
@@ -1145,6 +1231,9 @@ def render_challan_module(
                     st.error("Delete failed.")
                     st.code(str(e))
 
+    # =====================================================
+    # MANAGE ITEMS
+    # =====================================================
     with tab4:
         if challan_df.empty:
             st.info("No challans.")
@@ -1182,7 +1271,8 @@ def render_challan_module(
                         ni = st.text_input("Item ID",
                             key=f"add_cit_{widget_key_suffix}")
                 with c2:
-                    nd = st.text_input("Description",
+                    auto_desc = auto_description(ni) if ni != "(none)" else ""
+                    nd = st.text_input("Description", value=auto_desc,
                         key=f"add_cd_{widget_key_suffix}")
                 with c3:
                     nq = st.number_input("Qty", min_value=0.0, value=0.0,
@@ -1270,6 +1360,10 @@ def render_challan_module(
                         st.error("Failed.")
                         st.code(str(e))
 
+
+# =========================================================
+# SIDEBAR
+# =========================================================
 
 with st.sidebar:
     if os.path.exists("logo.png"):
