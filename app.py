@@ -49,18 +49,20 @@ ADJUSTMENT_COLUMNS = (
     "Qty", "Reason", "Remarks"
 )
 CHALLAN_COLUMNS = (
-    "challan_id", "challan_no", "challan_date", "customer_name",
-    "contact_detail", "project", "location", "sales_head", "payment_terms",
-    "vehicle_no", "received_by", "sent_by", "created_at"
+    "challan_id", "challan_no", "challan_date",
+    "vehicle_no", "received_by", "sent_by",
+    "customer_name", "contact_detail", "project",
+    "location", "sales_head", "payment_terms", "created_at"
 )
 CHALLAN_ITEMS_COLUMNS = (
     "challan_item_id", "challan_id", "sr_no",
     "item_id", "description", "quantity", "unit", "created_at"
 )
 RETURN_CHALLAN_COLUMNS = (
-    "challan_id", "challan_no", "challan_date", "customer_name",
-    "contact_detail", "project", "location", "sales_head", "payment_terms",
-    "vehicle_no", "received_by", "sent_by", "created_at"
+    "challan_id", "challan_no", "challan_date",
+    "vehicle_no", "received_by", "sent_by",
+    "customer_name", "contact_detail", "project",
+    "location", "sales_head", "payment_terms", "created_at"
 )
 RETURN_CHALLAN_ITEMS_COLUMNS = (
     "challan_item_id", "challan_id", "sr_no",
