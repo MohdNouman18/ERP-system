@@ -1,5 +1,4 @@
 import os
-import io
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 
@@ -493,6 +492,200 @@ def logo_html():
     </svg>"""
 
 
+def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
+    challan_no = header_row.get("challan_no", "") or ""
+    challan_date = fmt_date_only(header_row.get("challan_date", ""))
+
+    def _clean(v):
+        if v is None:
+            return ""
+        s = str(v).strip()
+        if s.lower() in ("nan", "none", "null"):
+            return ""
+        return s
+
+    customer_name = _clean(header_row.get("customer_name", ""))
+    contact_detail = _clean(header_row.get("contact_detail", ""))
+    project = _clean(header_row.get("project", ""))
+    location = _clean(header_row.get("location", ""))
+    sales_head = _clean(header_row.get("sales_head", ""))
+    payment_terms = _clean(header_row.get("payment_terms", ""))
+    vehicle_no_val = _clean(header_row.get("vehicle_no", ""))
+    received_by_val = _clean(header_row.get("received_by", ""))
+    sent_by_val = _clean(header_row.get("sent_by", ""))
+
+    rows_html = ""
+    MIN_ROWS = 15
+    count = 0
+
+    if items_df is not None and not items_df.empty:
+        for _, r in items_df.iterrows():
+            sr = r.get("sr_no", "")
+            desc = r.get("description", "") or ""
+            qty = r.get("quantity", "")
+            unit = r.get("unit", "") or ""
+            try:
+                qty_str = f"{float(qty):,.2f}".rstrip("0").rstrip(".")
+            except Exception:
+                qty_str = str(qty)
+            rows_html += f"""<tr>
+                <td class="c">{sr}</td>
+                <td>{desc}</td>
+                <td class="c">{qty_str}</td>
+                <td class="c">{unit}</td>
+            </tr>"""
+            count += 1
+
+    for _ in range(max(0, MIN_ROWS - count)):
+        rows_html += """<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>"""
+
+    logo_markup = logo_html()
+
+    def _sig_block(label, value):
+        val_display = value if value else "&nbsp;"
+        return f"""
+        <div class="sig">
+          <div class="sig-value">{val_display}</div>
+          <div class="sig-line"></div>
+          <div class="sig-label">{label}</div>
+        </div>
+        """
+
+    def _cust_row(label, value):
+        if not value:
+            return ""
+        return f'<div class="cust-item"><b>{label}:</b> <span>{value}</span></div>'
+
+    customer_block = ""
+    for lbl, val in [
+        ("Customer Name", customer_name),
+        ("Contact Detail", contact_detail),
+        ("Project", project),
+        ("Location", location),
+        ("Sales Head", sales_head),
+        ("Payment Terms", payment_terms),
+    ]:
+        customer_block += _cust_row(lbl, val)
+
+    return f"""
+<div id="challan-print" class="challan-page">
+<style>
+.challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
+padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
+.challan-page .hdr-center{{text-align:center;margin-bottom:10px;
+padding-bottom:12px;border-bottom:2px solid #000;}}
+.challan-page .logo-center{{text-align:center;margin-bottom:8px;}}
+.challan-page .cname{{font-size:24px;font-weight:900;letter-spacing:1px;
+margin:6px 0 6px 0;color:#000;}}
+.challan-page .caddr{{font-size:10px;line-height:1.55;color:#000;}}
+.challan-page .caddr-line{{margin:1px 0;}}
+.challan-page .meta-row{{display:flex;justify-content:space-between;
+font-size:12px;margin:12px 0 8px 0;gap:20px;padding:6px 0;}}
+.challan-page .meta-row b{{font-weight:900;}}
+.challan-page .meta-row span{{font-weight:400;}}
+.challan-page .cust-box{{border:1px solid #000;padding:8px 12px;
+margin:8px 0 12px 0;background:#f9f9f9;}}
+.challan-page .cust-grid{{display:grid;
+grid-template-columns:1fr 1fr 1fr;gap:6px 20px;font-size:11px;}}
+.challan-page .cust-item{{line-height:1.5;}}
+.challan-page .cust-item b{{font-weight:900;}}
+.challan-page .bar{{background:#000;color:#fff;text-align:center;
+font-weight:900;font-size:18px;letter-spacing:3px;padding:10px 0;
+margin:10px 0 12px 0;}}
+.challan-page table{{width:100%;border-collapse:collapse;font-size:11px;}}
+.challan-page th,.challan-page td{{border:1px solid #000;padding:6px 8px;
+vertical-align:middle;height:22px;}}
+.challan-page th{{background:#f2f2f2;font-weight:900;text-transform:uppercase;
+font-size:12px;padding:8px;text-align:center;}}
+.challan-page td.c{{text-align:center;}}
+.challan-page .ftr{{display:flex;justify-content:space-between;
+margin-top:60px;font-size:11px;font-weight:900;gap:20px;}}
+.challan-page .sig{{width:30%;text-align:center;}}
+.challan-page .sig-value{{min-height:22px;font-size:12px;
+font-weight:700;margin-bottom:6px;color:#000;padding-top:6px;}}
+.challan-page .sig-line{{border-top:1.5px solid #000;margin:0 auto;width:100%;}}
+.challan-page .sig-label{{text-transform:uppercase;letter-spacing:0.5px;
+padding-top:5px;font-weight:900;}}
+.challan-page .stamp-area{{margin-top:40px;display:flex;
+justify-content:flex-end;}}
+.challan-page .stamp-box{{width:180px;height:90px;border:1.5px dashed #555;
+display:flex;align-items:center;justify-content:center;
+color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
+@media print{{
+  body *{{visibility:hidden;}}
+  #challan-print, #challan-print *{{visibility:visible;}}
+  #challan-print{{position:absolute;left:0;top:0;width:100%;padding:0;}}
+  @page{{margin:12mm;}}
+}}
+</style>
+
+<div class="hdr-center">
+  <div class="logo-center">{logo_markup}</div>
+  <div class="cname">{COMPANY_NAME}</div>
+  <div class="caddr">
+    <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
+    <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
+    <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
+  </div>
+</div>
+
+<div class="meta-row">
+  <div><b>Challan No:</b> <span>{challan_no}</span></div>
+  <div><b>Date:</b> <span>{challan_date}</span></div>
+</div>
+
+<div class="cust-box">
+  <div class="cust-grid">
+    {customer_block if customer_block else '<div class="cust-item"><i>No customer details</i></div>'}
+  </div>
+</div>
+
+<div class="bar">{challan_title}</div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:12%;">SR NO</th>
+      <th style="width:58%;">DESCRIPTION</th>
+      <th style="width:15%;">QUANTITY</th>
+      <th style="width:15%;">UNIT</th>
+    </tr>
+  </thead>
+  <tbody>{rows_html}</tbody>
+</table>
+
+<div class="ftr">
+  {_sig_block("Vehicle No", vehicle_no_val)}
+  {_sig_block("Received By", received_by_val)}
+  {_sig_block("Sent By", sent_by_val)}
+</div>
+
+<div class="stamp-area">
+  <div class="stamp-box">STAMP</div>
+</div>
+</div>
+"""
+
+
+def build_printable_html_page(challan_html):
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Challan</title></head>
+<body style="margin:0;background:#f5f5f5;">
+<div style="text-align:center;padding:14px;background:#222;">
+  <button onclick="window.print()"
+    style="padding:12px 30px;font-size:16px;font-weight:bold;
+           background:#ff4b4b;color:#fff;border:none;border-radius:6px;
+           cursor:pointer;">
+    Print / Save as PDF
+  </button>
+</div>
+<div style="padding:20px;">
+{challan_html}
+</div>
+</body>
+</html>"""
+
 
 # =========================================================
 # UNIVERSAL BULK IMPORT
@@ -639,7 +832,6 @@ def bulk_import_page():
     st.markdown("#### 3. Preview")
     st.dataframe(df.head(20), use_container_width=True)
 
-    # ---- Options ----
     st.markdown("#### 4. Options")
 
     start_num = 1
@@ -655,11 +847,6 @@ def bulk_import_page():
             st.info(f"New IDs: `{auto_id_prefix}-{int(start_num):03d}`, "
                     f"`{auto_id_prefix}-{int(start_num) + 1:03d}`, ...")
 
-    keep_original_id = False
-    if has_auto_id and "Item_ID" in df.columns and target_name != "Item Registration":
-        pass  # non-item tables typically don't have Item_ID column
-
-    # ---- Build payloads ----
     def _clean(v):
         if v is None:
             return ""
@@ -672,17 +859,14 @@ def bulk_import_page():
     for idx, row in df.reset_index(drop=True).iterrows():
         record = {}
 
-        # If auto_id → assign
         if has_auto_id:
             record[auto_id_col] = f"{auto_id_prefix}-{int(start_num) + idx:03d}"
 
-        # Copy all expected columns from CSV
         for col in target_cols:
             if col == auto_id_col and has_auto_id:
-                continue  # already set
+                continue
             if col in df.columns:
                 val = _clean(row.get(col, ""))
-                # Numeric conversion
                 if col in NUMERIC_TARGETS.get(target_name, []):
                     try:
                         val = float(val) if val != "" else 0.0
