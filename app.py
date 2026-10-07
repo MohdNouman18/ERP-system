@@ -689,6 +689,236 @@ def build_printable_html_page(challan_html):
 </html>"""
 
 
+def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
+    if load_error:
+        st.error(f"Failed to load {label}: {load_error}")
+
+    tab1, tab2, tab3 = st.tabs([f"View {label}", f"Add {label}", "Update / Delete"])
+
+    with tab1:
+        search = st.text_input(f"Search {label}", key=f"s_{table_name}",
+                               placeholder=f"{id_col}, Item ID...")
+        display = filter_df(df, search)
+        if "Entry_Date" in display.columns:
+            display = display.copy()
+            display["Entry_Date"] = display["Entry_Date"].apply(fmt_date_only)
+        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.caption(f"{len(display)} record(s)")
+
+    with tab2:
+        next_id = next_id_for(table_name, df)
+        st.info(f"Next {id_col}: {next_id}")
+
+        if items_df.empty:
+            st.warning("Add an item in Item Registration first.")
+        else:
+            options = get_item_options(items_df)
+            with st.form(f"add_{table_name}_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    selected_item = st.selectbox("Item ID", options,
+                                                 key=f"ai_{table_name}")
+                with c2:
+                    qty = st.number_input("Quantity", min_value=0.0, value=0.0,
+                                          step=1.0, key=f"aq_{table_name}")
+                with c3:
+                    entry_date = st.date_input("Entry Date", value=date.today(),
+                                               key=f"ad_{table_name}")
+                submit = st.form_submit_button(f"Add {label}", type="primary")
+
+            if submit:
+                try:
+                    supabase.table(table_name).insert({
+                        id_col: next_id,
+                        "Item_ID": selected_item,
+                        "Qty": qty,
+                        "Entry_Date": date_str(entry_date)
+                    }).execute()
+                    st.success(f"{label} {next_id} added.")
+                    refresh_all()
+                except Exception as e:
+                    st.error(f"{label} add failed.")
+                    st.code(str(e))
+                    h = rls_hint(str(e), table_name, "insert")
+                    if h: st.info(h)
+
+    with tab3:
+        if df.empty:
+            st.info(f"No {label} records.")
+            return
+
+        selected_id = st.selectbox(f"Select {id_col}",
+                                   df[id_col].astype(str).tolist(),
+                                   key=f"sel_{table_name}")
+        selected = df.loc[df[id_col].astype(str) == selected_id].iloc[0]
+
+        options = get_item_options(items_df)
+        current_item = str(selected["Item_ID"]) if pd.notna(selected["Item_ID"]) else ""
+        default_idx = options.index(current_item) if current_item in options else 0
+
+        current_date = date.today()
+        if "Entry_Date" in selected and pd.notna(selected["Entry_Date"]):
+            try:
+                current_date = pd.to_datetime(selected["Entry_Date"]).date()
+            except Exception:
+                pass
+
+        with st.form(f"upd_{table_name}_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                if options:
+                    edit_item = st.selectbox("Item ID", options,
+                                             index=default_idx,
+                                             key=f"ei_{table_name}")
+                else:
+                    edit_item = current_item
+            with c2:
+                edit_qty = st.number_input(
+                    "Quantity", min_value=0.0,
+                    value=float(selected["Qty"]) if pd.notna(selected["Qty"]) else 0.0,
+                    step=1.0, key=f"eq_{table_name}"
+                )
+            with c3:
+                edit_date = st.date_input("Entry Date", value=current_date,
+                                          key=f"ed_{table_name}")
+            update = st.form_submit_button("Update", type="primary")
+
+        if update:
+            try:
+                supabase.table(table_name).update({
+                    "Item_ID": edit_item, "Qty": edit_qty,
+                    "Entry_Date": date_str(edit_date)
+                }).eq(id_col, selected_id).execute()
+                st.success(f"{label} updated.")
+                refresh_all()
+            except Exception as e:
+                st.error("Update failed.")
+                st.code(str(e))
+
+        st.markdown("---")
+        if st.button(f"Delete {label}", type="secondary",
+                     key=f"del_{table_name}"):
+            try:
+                supabase.table(table_name).delete().eq(id_col, selected_id).execute()
+                st.success(f"{label} deleted.")
+                refresh_all()
+            except Exception as e:
+                st.error("Delete failed.")
+                st.code(str(e))
+
+
+def challan_items_editor(key_prefix):
+    state_key = f"{key_prefix}_rows"
+    counter_key = f"{key_prefix}_counter"
+
+    if state_key not in st.session_state:
+        st.session_state[state_key] = [
+            {"id": 1, "item_id": "(none)", "description": "",
+             "quantity": 0.0, "unit": "Meter"}
+        ]
+        st.session_state[counter_key] = 1
+
+    item_options = get_item_options(items)
+    rows = st.session_state[state_key]
+
+    hc1, hc2, hc3, hc4, hc5 = st.columns([0.5, 2, 4, 2, 2])
+    with hc1: st.markdown("**#**")
+    with hc2: st.markdown("**Item ID**")
+    with hc3: st.markdown("**Description (auto)**")
+    with hc4: st.markdown("**Qty**")
+    with hc5: st.markdown("**Unit**")
+
+    to_remove = None
+
+    for idx, row in enumerate(rows):
+        rid = row["id"]
+        c1, c2, c3, c4, c5 = st.columns([0.5, 2, 4, 2, 2])
+
+        with c1:
+            st.markdown(f"**{idx + 1}**")
+
+        with c2:
+            if item_options:
+                opts = ["(none)"] + item_options
+                cur = row.get("item_id", "(none)")
+                pos = opts.index(cur) if cur in opts else 0
+                new_val = st.selectbox(
+                    "Item ID", opts, index=pos,
+                    key=f"{key_prefix}_item_{rid}",
+                    label_visibility="collapsed"
+                )
+                if new_val != cur:
+                    row["item_id"] = new_val
+                    row["description"] = auto_description(new_val)
+                    st.rerun()
+                else:
+                    row["item_id"] = new_val
+            else:
+                row["item_id"] = st.text_input(
+                    "Item ID", value=row.get("item_id", ""),
+                    key=f"{key_prefix}_itemtxt_{rid}",
+                    label_visibility="collapsed"
+                )
+
+        with c3:
+            row["description"] = st.text_input(
+                "Description", value=row.get("description", ""),
+                key=f"{key_prefix}_desc_{rid}",
+                label_visibility="collapsed"
+            )
+
+        with c4:
+            row["quantity"] = st.number_input(
+                "Qty", min_value=0.0,
+                value=float(row.get("quantity", 0.0)),
+                step=1.0,
+                key=f"{key_prefix}_qty_{rid}",
+                label_visibility="collapsed"
+            )
+
+        with c5:
+            c5a, c5b = st.columns([3, 1])
+            with c5a:
+                row["unit"] = st.text_input(
+                    "Unit", value=row.get("unit", "Meter"),
+                    key=f"{key_prefix}_unit_{rid}",
+                    label_visibility="collapsed"
+                )
+            with c5b:
+                if st.button("✖", key=f"{key_prefix}_rm_{rid}",
+                             help="Remove row"):
+                    to_remove = idx
+
+    if to_remove is not None:
+        st.session_state[state_key].pop(to_remove)
+        st.rerun()
+
+    bc1, bc2 = st.columns([1, 5])
+    with bc1:
+        if st.button("+ Add Row", key=f"{key_prefix}_add"):
+            st.session_state[counter_key] += 1
+            st.session_state[state_key].append({
+                "id": st.session_state[counter_key],
+                "item_id": "(none)",
+                "description": "",
+                "quantity": 0.0,
+                "unit": "Meter"
+            })
+            st.rerun()
+
+    return st.session_state[state_key]
+
+
+def reset_challan_rows(key_prefix):
+    state_key = f"{key_prefix}_rows"
+    counter_key = f"{key_prefix}_counter"
+    st.session_state[state_key] = [
+        {"id": 1, "item_id": "(none)", "description": "",
+         "quantity": 0.0, "unit": "Meter"}
+    ]
+    st.session_state[counter_key] = 1
+
+
 # =========================================================
 # UNIVERSAL BULK IMPORT
 # =========================================================
@@ -932,6 +1162,7 @@ def bulk_import_page():
                     st.code(e)
 
         refresh_all()
+
 
 
 # =========================================================
@@ -1518,33 +1749,773 @@ elif page == "Physical Check":
 
 
 elif page == "Delivery Challan":
-    render_challan_module(
-        page_title="Delivery Challan",
-        challan_table=CHALLAN_TABLE,
-        challan_items_table=CHALLAN_ITEMS_TABLE,
-        challan_df=challans,
-        challan_items_df=challan_items,
-        challan_no_prefix="DC",
-        challan_title="DELIVERY CHALLAN",
-        challans_load_err=challans_err,
-        items_load_err=challan_items_err,
-        widget_key_suffix="dc"
-    )
+    st.title("Delivery Challan")
+
+    if challans_err:
+        st.error(f"Failed to load Delivery_Challan: {challans_err}")
+    if challan_items_err:
+        st.error(f"Failed to load Delivery_Challan_Items: {challan_items_err}")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "View / Print", "Create", "Update / Delete", "Manage Items"
+    ])
+
+    with tab1:
+        if challans.empty:
+            st.info("No delivery challans yet.")
+        else:
+            c1, c2, c3 = st.columns([2, 1, 1])
+            with c1:
+                search_dc = st.text_input("Search",
+                    placeholder="Challan No, Customer, Location...",
+                    key="search_dc")
+            with c2:
+                sort_by_dc = st.selectbox("Sort by",
+                    ["Challan Date", "Challan ID", "Challan No"],
+                    key="sortby_dc")
+            with c3:
+                sort_ord_dc = st.selectbox("Order",
+                    ["Newest first", "Oldest first"],
+                    key="sortorder_dc")
+
+            display_dc = challans.copy()
+            if search_dc:
+                display_dc = filter_df(display_dc, search_dc)
+
+            sort_col = None
+            if sort_by_dc == "Challan Date":
+                sort_col = "challan_date"
+            elif sort_by_dc == "Challan ID":
+                sort_col = "challan_id"
+            elif sort_by_dc == "Challan No":
+                sort_col = "challan_no"
+
+            if sort_col and sort_col in display_dc.columns:
+                try:
+                    if sort_col == "challan_date":
+                        display_dc[sort_col] = pd.to_datetime(
+                            display_dc[sort_col], errors="coerce")
+                    display_dc = display_dc.sort_values(
+                        by=sort_col,
+                        ascending=(sort_ord_dc == "Oldest first"),
+                        na_position="last")
+                except Exception:
+                    pass
+
+            if display_dc.empty:
+                st.warning("No challans match the search.")
+            else:
+                left_col, right_col = st.columns([1, 1.6])
+
+                with left_col:
+                    st.markdown(f"#### {len(display_dc)} Challan(s)")
+
+                    options_display = []
+                    id_map = {}
+                    for _, row in display_dc.iterrows():
+                        no = str(row.get("challan_no", ""))
+                        d = fmt_date_only(row.get("challan_date", ""))
+                        cid = row.get("challan_id")
+                        label = f"{no}  •  {d}"
+                        options_display.append(label)
+                        id_map[label] = cid
+
+                    picked_label = st.radio("Challans",
+                        options_display, key="pick_dc",
+                        label_visibility="collapsed")
+                    picked_id = id_map.get(picked_label)
+
+                    picked_row = display_dc.loc[
+                        display_dc["challan_id"] == picked_id
+                    ].iloc[0]
+
+                    items_for = challan_items[
+                        challan_items["challan_id"] == picked_id
+                    ].sort_values("sr_no")
+
+                    st.markdown("---")
+                    st.markdown(
+                        f"**Challan No:** {picked_row.get('challan_no', '')}  \n"
+                        f"**Date:** {fmt_date_only(picked_row.get('challan_date', ''))}  \n"
+                        f"**Customer:** {picked_row.get('customer_name', '')}  \n"
+                        f"**Contact:** {picked_row.get('contact_detail', '')}  \n"
+                        f"**Project:** {picked_row.get('project', '')}  \n"
+                        f"**Location:** {picked_row.get('location', '')}  \n"
+                        f"**Sales Head:** {picked_row.get('sales_head', '')}  \n"
+                        f"**Payment Terms:** {picked_row.get('payment_terms', '')}  \n"
+                        f"**Items:** {len(items_for)}"
+                    )
+
+                with right_col:
+                    st.markdown("#### Print / Download")
+                    html = build_challan_html(picked_row, items_for,
+                                              "DELIVERY CHALLAN")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        printable = build_printable_html_page(html)
+                        st.download_button("PDF (Print)",
+                            data=printable.encode("utf-8"),
+                            file_name=f"{picked_row.get('challan_no', 'dc')}_print.html",
+                            mime="text/html",
+                            use_container_width=True, key="pdf_dc")
+                    with c2:
+                        st.download_button("HTML",
+                            data=html.encode("utf-8"),
+                            file_name=f"{picked_row.get('challan_no', 'dc')}.html",
+                            mime="text/html",
+                            use_container_width=True, key="html_dc")
+
+                    if not items_for.empty:
+                        st.download_button("CSV (Items)",
+                            data=items_for.to_csv(index=False).encode("utf-8"),
+                            file_name=f"{picked_row.get('challan_no', 'dc')}_items.csv",
+                            mime="text/csv",
+                            use_container_width=True, key="csv_dc")
+                        st.markdown("#### Items")
+                        st.dataframe(items_for[
+                            ["sr_no", "item_id", "description", "quantity", "unit"]
+                        ], use_container_width=True, hide_index=True)
+
+    with tab2:
+        next_no_dc = next_challan_no(challans, "DC")
+        st.info(f"Next Challan No: {next_no_dc}")
+
+        st.markdown("#### Customer Details")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            cd_dc = st.date_input("Challan Date", value=date.today(), key="cd_dc")
+            cn_dc = st.text_input("Customer Name", key="cn_dc")
+            cdt_dc = st.text_input("Contact Detail", key="cdt_dc")
+        with c2:
+            pj_dc = st.text_input("Project", key="pj_dc")
+            lc_dc = st.text_input("Location", key="lc_dc")
+            sh_dc = st.text_input("Sales Head", key="sh_dc")
+        with c3:
+            pt_dc = st.text_input("Payment Terms", key="pt_dc")
+            vn_dc = st.text_input("Vehicle No", key="vn_dc")
+            rb_dc = st.text_input("Received By", key="rb_dc")
+            sb_dc = st.text_input("Sent By", key="sb_dc")
+
+        st.markdown("---")
+        st.markdown("#### Items")
+        item_rows_dc = challan_items_editor("create_dc")
+
+        st.markdown("---")
+        if st.button("Create Challan", type="primary", key="create_btn_dc"):
+            if not cn_dc.strip():
+                st.error("Customer Name required.")
+            else:
+                valid_dc = [r for r in item_rows_dc
+                            if r["description"].strip() and r["quantity"] > 0]
+                if not valid_dc:
+                    st.error("At least one valid item row required.")
+                else:
+                    try:
+                        hdr_dc = {
+                            "challan_no": next_no_dc,
+                            "challan_date": date_str(cd_dc),
+                            "customer_name": cn_dc.strip(),
+                            "contact_detail": cdt_dc.strip() or None,
+                            "project": pj_dc.strip() or None,
+                            "location": lc_dc.strip() or None,
+                            "sales_head": sh_dc.strip() or None,
+                            "payment_terms": pt_dc.strip() or None,
+                            "vehicle_no": vn_dc.strip() or None,
+                            "received_by": rb_dc.strip() or None,
+                            "sent_by": sb_dc.strip() or None,
+                        }
+                        resp_dc = supabase.table(CHALLAN_TABLE).insert(hdr_dc).execute()
+                        if resp_dc.data:
+                            cid_dc = resp_dc.data[0]["challan_id"]
+                            payloads_dc = []
+                            for idx, r in enumerate(valid_dc, 1):
+                                payloads_dc.append({
+                                    "challan_id": cid_dc, "sr_no": idx,
+                                    "item_id": r["item_id"] if r["item_id"] != "(none)" else None,
+                                    "description": r["description"].strip(),
+                                    "quantity": r["quantity"],
+                                    "unit": (r["unit"] or "Meter").strip()
+                                })
+                            supabase.table(CHALLAN_ITEMS_TABLE).insert(payloads_dc).execute()
+                            st.success(f"Challan {next_no_dc} created with {len(valid_dc)} item(s).")
+                            reset_challan_rows("create_dc")
+                            refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
+
+    with tab3:
+        if challans.empty:
+            st.info("No challans.")
+        else:
+            sel_no_dc = st.selectbox("Select Challan",
+                challans["challan_no"].astype(str).tolist(), key="upd_dc")
+            sel_row_dc = challans.loc[
+                challans["challan_no"].astype(str) == sel_no_dc
+            ].iloc[0]
+            cid_dc2 = sel_row_dc["challan_id"]
+
+            def _v_dc(col):
+                v = sel_row_dc.get(col)
+                return str(v) if pd.notna(v) else ""
+
+            with st.form("upd_dc_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    d = date.today()
+                    if pd.notna(sel_row_dc["challan_date"]):
+                        try:
+                            d = pd.to_datetime(sel_row_dc["challan_date"]).date()
+                        except Exception:
+                            d = date.today()
+                    ed_dc = st.date_input("Challan Date", value=d, key="ed_dc")
+                    ecn_dc = st.text_input("Customer Name", value=_v_dc("customer_name"), key="ecn_dc")
+                    ecdt_dc = st.text_input("Contact Detail", value=_v_dc("contact_detail"), key="ecdt_dc")
+                with c2:
+                    epj_dc = st.text_input("Project", value=_v_dc("project"), key="epj_dc")
+                    elc_dc = st.text_input("Location", value=_v_dc("location"), key="elc_dc")
+                    esh_dc = st.text_input("Sales Head", value=_v_dc("sales_head"), key="esh_dc")
+                with c3:
+                    ept_dc = st.text_input("Payment Terms", value=_v_dc("payment_terms"), key="ept_dc")
+                    evn_dc = st.text_input("Vehicle No", value=_v_dc("vehicle_no"), key="evn_dc")
+                    erb_dc = st.text_input("Received By", value=_v_dc("received_by"), key="erb_dc")
+                    esb_dc = st.text_input("Sent By", value=_v_dc("sent_by"), key="esb_dc")
+                upd_dc = st.form_submit_button("Update Header", type="primary")
+
+            if upd_dc:
+                try:
+                    supabase.table(CHALLAN_TABLE).update({
+                        "challan_date": date_str(ed_dc),
+                        "customer_name": ecn_dc.strip(),
+                        "contact_detail": ecdt_dc.strip() or None,
+                        "project": epj_dc.strip() or None,
+                        "location": elc_dc.strip() or None,
+                        "sales_head": esh_dc.strip() or None,
+                        "payment_terms": ept_dc.strip() or None,
+                        "vehicle_no": evn_dc.strip() or None,
+                        "received_by": erb_dc.strip() or None,
+                        "sent_by": esb_dc.strip() or None,
+                    }).eq("challan_id", cid_dc2).execute()
+                    st.success("Updated.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Update failed.")
+                    st.code(str(e))
+
+            if st.button("Delete Challan", type="secondary", key="del_dc"):
+                try:
+                    supabase.table(CHALLAN_TABLE).delete().eq(
+                        "challan_id", cid_dc2).execute()
+                    st.success("Deleted.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Failed.")
+                    st.code(str(e))
+
+    with tab4:
+        if challans.empty:
+            st.info("No challans.")
+        else:
+            sel_no_dc2 = st.selectbox("Select Challan",
+                challans["challan_no"].astype(str).tolist(), key="items_dc")
+            sel_row_dc2 = challans.loc[
+                challans["challan_no"].astype(str) == sel_no_dc2
+            ].iloc[0]
+            cid_dc3 = sel_row_dc2["challan_id"]
+
+            cur_dc = challan_items[
+                challan_items["challan_id"] == cid_dc3
+            ].sort_values("sr_no")
+
+            st.markdown(f"#### Items for {sel_no_dc2}")
+            if cur_dc.empty:
+                st.info("No items.")
+                next_sr_dc = 1
+            else:
+                st.dataframe(cur_dc, use_container_width=True, hide_index=True)
+                next_sr_dc = int(cur_dc["sr_no"].max()) + 1
+
+            item_options_dc = get_item_options(items)
+            with st.form("add_item_dc_form"):
+                st.markdown("#### Add New Item")
+                c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
+                with c1:
+                    if item_options_dc:
+                        ni_dc = st.selectbox("Item ID",
+                            ["(none)"] + item_options_dc, key="add_ci_dc")
+                    else:
+                        ni_dc = st.text_input("Item ID", key="add_cit_dc")
+                with c2:
+                    auto_desc_dc = auto_description(ni_dc) if ni_dc != "(none)" else ""
+                    nd_dc = st.text_input("Description", value=auto_desc_dc,
+                                          key=f"add_cd_dc_{ni_dc}")
+                with c3:
+                    nq_dc = st.number_input("Qty", min_value=0.0, value=0.0,
+                                            step=1.0, key="add_cq_dc")
+                with c4:
+                    nu_dc = st.text_input("Unit", value="Meter", key="add_cu_dc")
+                ad_dc = st.form_submit_button("Add", type="primary")
+
+            if ad_dc:
+                if not nd_dc.strip() or nq_dc <= 0:
+                    st.error("Desc + Qty required.")
+                else:
+                    try:
+                        supabase.table(CHALLAN_ITEMS_TABLE).insert({
+                            "challan_id": cid_dc3, "sr_no": next_sr_dc,
+                            "item_id": ni_dc if ni_dc != "(none)" else None,
+                            "description": nd_dc.strip(),
+                            "quantity": nq_dc, "unit": nu_dc.strip() or "Meter"
+                        }).execute()
+                        st.success("Added.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
+
+            if not cur_dc.empty:
+                st.markdown("---")
+                st.markdown("#### Edit / Delete")
+                eid_dc = st.selectbox("Select Item",
+                    cur_dc["challan_item_id"].astype(str).tolist(),
+                    key="edit_ci_sel_dc")
+                er_dc = cur_dc.loc[
+                    cur_dc["challan_item_id"].astype(str) == eid_dc
+                ].iloc[0]
+
+                with st.form("edit_item_dc_form"):
+                    c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
+                    with c1:
+                        ce_dc = str(er_dc["item_id"]) if pd.notna(er_dc["item_id"]) else "(none)"
+                        if item_options_dc:
+                            idx = item_options_dc.index(ce_dc) + 1 if ce_dc in item_options_dc else 0
+                            ei_dc = st.selectbox("Item ID",
+                                ["(none)"] + item_options_dc, index=idx,
+                                key="edit_ci_dc")
+                        else:
+                            ei_dc = st.text_input("Item ID", value=ce_dc, key="edit_cit_dc")
+                    with c2:
+                        ed_dc = st.text_input("Description",
+                            value=str(er_dc["description"]) if pd.notna(er_dc["description"]) else "",
+                            key="edit_cd_dc")
+                    with c3:
+                        eq_dc = st.number_input("Qty", min_value=0.0,
+                            value=float(er_dc["quantity"]) if pd.notna(er_dc["quantity"]) else 0.0,
+                            step=1.0, key="edit_cq_dc")
+                    with c4:
+                        eu_dc = st.text_input("Unit",
+                            value=str(er_dc["unit"]) if pd.notna(er_dc["unit"]) else "Meter",
+                            key="edit_cu_dc")
+                    sv_dc = st.form_submit_button("Save", type="primary")
+
+                if sv_dc:
+                    try:
+                        supabase.table(CHALLAN_ITEMS_TABLE).update({
+                            "item_id": ei_dc if ei_dc != "(none)" else None,
+                            "description": ed_dc.strip(),
+                            "quantity": eq_dc,
+                            "unit": eu_dc.strip() or "Meter"
+                        }).eq("challan_item_id", eid_dc).execute()
+                        st.success("Updated.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Update failed.")
+                        st.code(str(e))
+
+                if st.button("Delete Item", type="secondary", key="del_ci_dc"):
+                    try:
+                        supabase.table(CHALLAN_ITEMS_TABLE).delete().eq(
+                            "challan_item_id", eid_dc).execute()
+                        st.success("Deleted.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
 
 
 elif page == "Return Challan":
-    render_challan_module(
-        page_title="Return Challan",
-        challan_table=RETURN_CHALLAN_TABLE,
-        challan_items_table=RETURN_CHALLAN_ITEMS_TABLE,
-        challan_df=return_challans,
-        challan_items_df=return_challan_items,
-        challan_no_prefix="RC",
-        challan_title="RETURN CHALLAN",
-        challans_load_err=return_challans_err,
-        items_load_err=return_challan_items_err,
-        widget_key_suffix="rc"
-    )
+    st.title("Return Challan")
+
+    if return_challans_err:
+        st.error(f"Failed to load Return_Challan: {return_challans_err}")
+    if return_challan_items_err:
+        st.error(f"Failed to load Return_Challan_Items: {return_challan_items_err}")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "View / Print", "Create", "Update / Delete", "Manage Items"
+    ])
+
+    with tab1:
+        if return_challans.empty:
+            st.info("No return challans yet.")
+        else:
+            c1, c2, c3 = st.columns([2, 1, 1])
+            with c1:
+                search_rc = st.text_input("Search",
+                    placeholder="Challan No, Customer, Location...",
+                    key="search_rc")
+            with c2:
+                sort_by_rc = st.selectbox("Sort by",
+                    ["Challan Date", "Challan ID", "Challan No"],
+                    key="sortby_rc")
+            with c3:
+                sort_ord_rc = st.selectbox("Order",
+                    ["Newest first", "Oldest first"],
+                    key="sortorder_rc")
+
+            display_rc = return_challans.copy()
+            if search_rc:
+                display_rc = filter_df(display_rc, search_rc)
+
+            sort_col_rc = None
+            if sort_by_rc == "Challan Date":
+                sort_col_rc = "challan_date"
+            elif sort_by_rc == "Challan ID":
+                sort_col_rc = "challan_id"
+            elif sort_by_rc == "Challan No":
+                sort_col_rc = "challan_no"
+
+            if sort_col_rc and sort_col_rc in display_rc.columns:
+                try:
+                    if sort_col_rc == "challan_date":
+                        display_rc[sort_col_rc] = pd.to_datetime(
+                            display_rc[sort_col_rc], errors="coerce")
+                    display_rc = display_rc.sort_values(
+                        by=sort_col_rc,
+                        ascending=(sort_ord_rc == "Oldest first"),
+                        na_position="last")
+                except Exception:
+                    pass
+
+            if display_rc.empty:
+                st.warning("No challans match the search.")
+            else:
+                left_col_rc, right_col_rc = st.columns([1, 1.6])
+
+                with left_col_rc:
+                    st.markdown(f"#### {len(display_rc)} Challan(s)")
+
+                    options_display_rc = []
+                    id_map_rc = {}
+                    for _, row in display_rc.iterrows():
+                        no = str(row.get("challan_no", ""))
+                        d = fmt_date_only(row.get("challan_date", ""))
+                        cid = row.get("challan_id")
+                        label = f"{no}  •  {d}"
+                        options_display_rc.append(label)
+                        id_map_rc[label] = cid
+
+                    picked_label_rc = st.radio("Challans",
+                        options_display_rc, key="pick_rc",
+                        label_visibility="collapsed")
+                    picked_id_rc = id_map_rc.get(picked_label_rc)
+
+                    picked_row_rc = display_rc.loc[
+                        display_rc["challan_id"] == picked_id_rc
+                    ].iloc[0]
+
+                    items_for_rc = return_challan_items[
+                        return_challan_items["challan_id"] == picked_id_rc
+                    ].sort_values("sr_no")
+
+                    st.markdown("---")
+                    st.markdown(
+                        f"**Challan No:** {picked_row_rc.get('challan_no', '')}  \n"
+                        f"**Date:** {fmt_date_only(picked_row_rc.get('challan_date', ''))}  \n"
+                        f"**Customer:** {picked_row_rc.get('customer_name', '')}  \n"
+                        f"**Contact:** {picked_row_rc.get('contact_detail', '')}  \n"
+                        f"**Project:** {picked_row_rc.get('project', '')}  \n"
+                        f"**Location:** {picked_row_rc.get('location', '')}  \n"
+                        f"**Sales Head:** {picked_row_rc.get('sales_head', '')}  \n"
+                        f"**Payment Terms:** {picked_row_rc.get('payment_terms', '')}  \n"
+                        f"**Items:** {len(items_for_rc)}"
+                    )
+
+                with right_col_rc:
+                    st.markdown("#### Print / Download")
+                    html_rc = build_challan_html(picked_row_rc, items_for_rc,
+                                                 "RETURN CHALLAN")
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        printable_rc = build_printable_html_page(html_rc)
+                        st.download_button("PDF (Print)",
+                            data=printable_rc.encode("utf-8"),
+                            file_name=f"{picked_row_rc.get('challan_no', 'rc')}_print.html",
+                            mime="text/html",
+                            use_container_width=True, key="pdf_rc")
+                    with c2:
+                        st.download_button("HTML",
+                            data=html_rc.encode("utf-8"),
+                            file_name=f"{picked_row_rc.get('challan_no', 'rc')}.html",
+                            mime="text/html",
+                            use_container_width=True, key="html_rc")
+
+                    if not items_for_rc.empty:
+                        st.download_button("CSV (Items)",
+                            data=items_for_rc.to_csv(index=False).encode("utf-8"),
+                            file_name=f"{picked_row_rc.get('challan_no', 'rc')}_items.csv",
+                            mime="text/csv",
+                            use_container_width=True, key="csv_rc")
+                        st.markdown("#### Items")
+                        st.dataframe(items_for_rc[
+                            ["sr_no", "item_id", "description", "quantity", "unit"]
+                        ], use_container_width=True, hide_index=True)
+
+    with tab2:
+        next_no_rc = next_challan_no(return_challans, "RC")
+        st.info(f"Next Challan No: {next_no_rc}")
+
+        st.markdown("#### Customer Details")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            cd_rc = st.date_input("Challan Date", value=date.today(), key="cd_rc")
+            cn_rc = st.text_input("Customer Name", key="cn_rc")
+            cdt_rc = st.text_input("Contact Detail", key="cdt_rc")
+        with c2:
+            pj_rc = st.text_input("Project", key="pj_rc")
+            lc_rc = st.text_input("Location", key="lc_rc")
+            sh_rc = st.text_input("Sales Head", key="sh_rc")
+        with c3:
+            pt_rc = st.text_input("Payment Terms", key="pt_rc")
+            vn_rc = st.text_input("Vehicle No", key="vn_rc")
+            rb_rc = st.text_input("Received By", key="rb_rc")
+            sb_rc = st.text_input("Sent By", key="sb_rc")
+
+        st.markdown("---")
+        st.markdown("#### Items")
+        item_rows_rc = challan_items_editor("create_rc")
+
+        st.markdown("---")
+        if st.button("Create Challan", type="primary", key="create_btn_rc"):
+            if not cn_rc.strip():
+                st.error("Customer Name required.")
+            else:
+                valid_rc = [r for r in item_rows_rc
+                            if r["description"].strip() and r["quantity"] > 0]
+                if not valid_rc:
+                    st.error("At least one valid item row required.")
+                else:
+                    try:
+                        hdr_rc = {
+                            "challan_no": next_no_rc,
+                            "challan_date": date_str(cd_rc),
+                            "customer_name": cn_rc.strip(),
+                            "contact_detail": cdt_rc.strip() or None,
+                            "project": pj_rc.strip() or None,
+                            "location": lc_rc.strip() or None,
+                            "sales_head": sh_rc.strip() or None,
+                            "payment_terms": pt_rc.strip() or None,
+                            "vehicle_no": vn_rc.strip() or None,
+                            "received_by": rb_rc.strip() or None,
+                            "sent_by": sb_rc.strip() or None,
+                        }
+                        resp_rc = supabase.table(RETURN_CHALLAN_TABLE).insert(hdr_rc).execute()
+                        if resp_rc.data:
+                            cid_rc = resp_rc.data[0]["challan_id"]
+                            payloads_rc = []
+                            for idx, r in enumerate(valid_rc, 1):
+                                payloads_rc.append({
+                                    "challan_id": cid_rc, "sr_no": idx,
+                                    "item_id": r["item_id"] if r["item_id"] != "(none)" else None,
+                                    "description": r["description"].strip(),
+                                    "quantity": r["quantity"],
+                                    "unit": (r["unit"] or "Meter").strip()
+                                })
+                            supabase.table(RETURN_CHALLAN_ITEMS_TABLE).insert(payloads_rc).execute()
+                            st.success(f"Challan {next_no_rc} created with {len(valid_rc)} item(s).")
+                            reset_challan_rows("create_rc")
+                            refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
+
+    with tab3:
+        if return_challans.empty:
+            st.info("No challans.")
+        else:
+            sel_no_rc = st.selectbox("Select Challan",
+                return_challans["challan_no"].astype(str).tolist(), key="upd_rc")
+            sel_row_rc = return_challans.loc[
+                return_challans["challan_no"].astype(str) == sel_no_rc
+            ].iloc[0]
+            cid_rc2 = sel_row_rc["challan_id"]
+
+            def _v_rc(col):
+                v = sel_row_rc.get(col)
+                return str(v) if pd.notna(v) else ""
+
+            with st.form("upd_rc_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    d = date.today()
+                    if pd.notna(sel_row_rc["challan_date"]):
+                        try:
+                            d = pd.to_datetime(sel_row_rc["challan_date"]).date()
+                        except Exception:
+                            d = date.today()
+                    ed_rc = st.date_input("Challan Date", value=d, key="ed_rc")
+                    ecn_rc = st.text_input("Customer Name", value=_v_rc("customer_name"), key="ecn_rc")
+                    ecdt_rc = st.text_input("Contact Detail", value=_v_rc("contact_detail"), key="ecdt_rc")
+                with c2:
+                    epj_rc = st.text_input("Project", value=_v_rc("project"), key="epj_rc")
+                    elc_rc = st.text_input("Location", value=_v_rc("location"), key="elc_rc")
+                    esh_rc = st.text_input("Sales Head", value=_v_rc("sales_head"), key="esh_rc")
+                with c3:
+                    ept_rc = st.text_input("Payment Terms", value=_v_rc("payment_terms"), key="ept_rc")
+                    evn_rc = st.text_input("Vehicle No", value=_v_rc("vehicle_no"), key="evn_rc")
+                    erb_rc = st.text_input("Received By", value=_v_rc("received_by"), key="erb_rc")
+                    esb_rc = st.text_input("Sent By", value=_v_rc("sent_by"), key="esb_rc")
+                upd_rc = st.form_submit_button("Update Header", type="primary")
+
+            if upd_rc:
+                try:
+                    supabase.table(RETURN_CHALLAN_TABLE).update({
+                        "challan_date": date_str(ed_rc),
+                        "customer_name": ecn_rc.strip(),
+                        "contact_detail": ecdt_rc.strip() or None,
+                        "project": epj_rc.strip() or None,
+                        "location": elc_rc.strip() or None,
+                        "sales_head": esh_rc.strip() or None,
+                        "payment_terms": ept_rc.strip() or None,
+                        "vehicle_no": evn_rc.strip() or None,
+                        "received_by": erb_rc.strip() or None,
+                        "sent_by": esb_rc.strip() or None,
+                    }).eq("challan_id", cid_rc2).execute()
+                    st.success("Updated.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Update failed.")
+                    st.code(str(e))
+
+            if st.button("Delete Challan", type="secondary", key="del_rc"):
+                try:
+                    supabase.table(RETURN_CHALLAN_TABLE).delete().eq(
+                        "challan_id", cid_rc2).execute()
+                    st.success("Deleted.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Failed.")
+                    st.code(str(e))
+
+    with tab4:
+        if return_challans.empty:
+            st.info("No challans.")
+        else:
+            sel_no_rc2 = st.selectbox("Select Challan",
+                return_challans["challan_no"].astype(str).tolist(), key="items_rc")
+            sel_row_rc2 = return_challans.loc[
+                return_challans["challan_no"].astype(str) == sel_no_rc2
+            ].iloc[0]
+            cid_rc3 = sel_row_rc2["challan_id"]
+
+            cur_rc = return_challan_items[
+                return_challan_items["challan_id"] == cid_rc3
+            ].sort_values("sr_no")
+
+            st.markdown(f"#### Items for {sel_no_rc2}")
+            if cur_rc.empty:
+                st.info("No items.")
+                next_sr_rc = 1
+            else:
+                st.dataframe(cur_rc, use_container_width=True, hide_index=True)
+                next_sr_rc = int(cur_rc["sr_no"].max()) + 1
+
+            item_options_rc = get_item_options(items)
+            with st.form("add_item_rc_form"):
+                st.markdown("#### Add New Item")
+                c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
+                with c1:
+                    if item_options_rc:
+                        ni_rc = st.selectbox("Item ID",
+                            ["(none)"] + item_options_rc, key="add_ci_rc")
+                    else:
+                        ni_rc = st.text_input("Item ID", key="add_cit_rc")
+                with c2:
+                    auto_desc_rc = auto_description(ni_rc) if ni_rc != "(none)" else ""
+                    nd_rc = st.text_input("Description", value=auto_desc_rc,
+                                          key=f"add_cd_rc_{ni_rc}")
+                with c3:
+                    nq_rc = st.number_input("Qty", min_value=0.0, value=0.0,
+                                            step=1.0, key="add_cq_rc")
+                with c4:
+                    nu_rc = st.text_input("Unit", value="Meter", key="add_cu_rc")
+                ad_rc = st.form_submit_button("Add", type="primary")
+
+            if ad_rc:
+                if not nd_rc.strip() or nq_rc <= 0:
+                    st.error("Desc + Qty required.")
+                else:
+                    try:
+                        supabase.table(RETURN_CHALLAN_ITEMS_TABLE).insert({
+                            "challan_id": cid_rc3, "sr_no": next_sr_rc,
+                            "item_id": ni_rc if ni_rc != "(none)" else None,
+                            "description": nd_rc.strip(),
+                            "quantity": nq_rc, "unit": nu_rc.strip() or "Meter"
+                        }).execute()
+                        st.success("Added.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
+
+            if not cur_rc.empty:
+                st.markdown("---")
+                st.markdown("#### Edit / Delete")
+                eid_rc = st.selectbox("Select Item",
+                    cur_rc["challan_item_id"].astype(str).tolist(),
+                    key="edit_ci_sel_rc")
+                er_rc = cur_rc.loc[
+                    cur_rc["challan_item_id"].astype(str) == eid_rc
+                ].iloc[0]
+
+                with st.form("edit_item_rc_form"):
+                    c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
+                    with c1:
+                        ce_rc = str(er_rc["item_id"]) if pd.notna(er_rc["item_id"]) else "(none)"
+                        if item_options_rc:
+                            idx = item_options_rc.index(ce_rc) + 1 if ce_rc in item_options_rc else 0
+                            ei_rc = st.selectbox("Item ID",
+                                ["(none)"] + item_options_rc, index=idx,
+                                key="edit_ci_rc")
+                        else:
+                            ei_rc = st.text_input("Item ID", value=ce_rc, key="edit_cit_rc")
+                    with c2:
+                        ed_rc = st.text_input("Description",
+                            value=str(er_rc["description"]) if pd.notna(er_rc["description"]) else "",
+                            key="edit_cd_rc")
+                    with c3:
+                        eq_rc = st.number_input("Qty", min_value=0.0,
+                            value=float(er_rc["quantity"]) if pd.notna(er_rc["quantity"]) else 0.0,
+                            step=1.0, key="edit_cq_rc")
+                    with c4:
+                        eu_rc = st.text_input("Unit",
+                            value=str(er_rc["unit"]) if pd.notna(er_rc["unit"]) else "Meter",
+                            key="edit_cu_rc")
+                    sv_rc = st.form_submit_button("Save", type="primary")
+
+                if sv_rc:
+                    try:
+                        supabase.table(RETURN_CHALLAN_ITEMS_TABLE).update({
+                            "item_id": ei_rc if ei_rc != "(none)" else None,
+                            "description": ed_rc.strip(),
+                            "quantity": eq_rc,
+                            "unit": eu_rc.strip() or "Meter"
+                        }).eq("challan_item_id", eid_rc).execute()
+                        st.success("Updated.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Update failed.")
+                        st.code(str(e))
+
+                if st.button("Delete Item", type="secondary", key="del_ci_rc"):
+                    try:
+                        supabase.table(RETURN_CHALLAN_ITEMS_TABLE).delete().eq(
+                            "challan_item_id", eid_rc).execute()
+                        st.success("Deleted.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
 
 
 elif page == "Analytics":
@@ -1577,14 +2548,15 @@ elif page == "Custom Charts":
     }
 
     src = st.selectbox("Select a dataset", list(sources.keys()))
-    df = sources[src].copy()
+    df_chart = sources[src].copy()
 
-    if df.empty:
+    if df_chart.empty:
         empty_state(f"{src} has no records.")
         st.stop()
 
-    num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
-    all_cols = df.columns.tolist()
+    num_cols = [c for c in df_chart.columns
+                if pd.api.types.is_numeric_dtype(df_chart[c])]
+    all_cols = df_chart.columns.tolist()
 
     cht = st.selectbox("Chart Type",
         ["Bar Chart", "Grouped Bar Chart", "Stacked Bar Chart",
@@ -1602,25 +2574,33 @@ elif page == "Custom Charts":
 
     try:
         if cht == "Bar Chart":
-            fig = px.bar(df, x=x, y=y, color=(cb if cb != "(none)" else None), text_auto=True)
+            fig = px.bar(df_chart, x=x, y=y,
+                         color=(cb if cb != "(none)" else None), text_auto=True)
         elif cht == "Grouped Bar Chart":
-            fig = px.bar(df, x=x, y=y, color=(cb if cb != "(none)" else None), barmode="group")
+            fig = px.bar(df_chart, x=x, y=y,
+                         color=(cb if cb != "(none)" else None), barmode="group")
         elif cht == "Stacked Bar Chart":
-            fig = px.bar(df, x=x, y=y, color=(cb if cb != "(none)" else None), barmode="stack")
+            fig = px.bar(df_chart, x=x, y=y,
+                         color=(cb if cb != "(none)" else None), barmode="stack")
         elif cht == "Line Chart":
-            fig = px.line(df, x=x, y=y, color=(cb if cb != "(none)" else None), markers=True)
+            fig = px.line(df_chart, x=x, y=y,
+                          color=(cb if cb != "(none)" else None), markers=True)
         elif cht == "Area Chart":
-            fig = px.area(df, x=x, y=y, color=(cb if cb != "(none)" else None))
+            fig = px.area(df_chart, x=x, y=y,
+                          color=(cb if cb != "(none)" else None))
         elif cht == "Pie Chart":
-            fig = px.pie(df, names=x, values=y)
+            fig = px.pie(df_chart, names=x, values=y)
         elif cht == "Donut Chart":
-            fig = px.pie(df, names=x, values=y, hole=0.5)
+            fig = px.pie(df_chart, names=x, values=y, hole=0.5)
         elif cht == "Scatter Plot":
-            fig = px.scatter(df, x=x, y=y, color=(cb if cb != "(none)" else None))
+            fig = px.scatter(df_chart, x=x, y=y,
+                             color=(cb if cb != "(none)" else None))
         elif cht == "Histogram":
-            fig = px.histogram(df, x=x, color=(cb if cb != "(none)" else None))
+            fig = px.histogram(df_chart, x=x,
+                               color=(cb if cb != "(none)" else None))
         elif cht == "Box Plot":
-            fig = px.box(df, x=x, y=y, color=(cb if cb != "(none)" else None))
+            fig = px.box(df_chart, x=x, y=y,
+                         color=(cb if cb != "(none)" else None))
         else:
             fig = None
 
