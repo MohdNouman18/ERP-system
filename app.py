@@ -1,4 +1,5 @@
 import os
+import io
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 
@@ -211,15 +212,15 @@ def _process(cols, num_cols, records, err):
     if err:
         return pd.DataFrame(columns=list(cols)), err
     df = make_df(records, cols)
-    df = convert_numeric(df, num_cols)
+    if num_cols:
+        df = convert_numeric(df, num_cols)
     return df, None
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def load_all_data():
     specs = [
-        (ITEM_TABLE, ITEM_COLUMNS,
-         ("Nominal_Diameter_mm", "Wall_Thickness_mm", "Standard_Length")),
+        (ITEM_TABLE, ITEM_COLUMNS, ()),
         (PRODUCTION_TABLE, PRODUCTION_COLUMNS,
          ("Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m")),
         (OPENING_TABLE, OPENING_COLUMNS, ("Qty",)),
@@ -259,16 +260,8 @@ def load_all_data():
 ) = load_all_data()
 
 
-# =========================================================
-# ITEM LOOKUP — Full auto description
-# =========================================================
-
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_item_lookup(items_df):
-    """
-    Returns dict: Item_ID -> full auto description string.
-    Format: Material Grade | Application | Dia mm | WT X mm | SDR X | Color
-    """
     if items_df.empty:
         return {}
     lookup = {}
@@ -276,56 +269,28 @@ def build_item_lookup(items_df):
         iid = str(row.get("Item_ID", "") or "").strip()
         if not iid:
             continue
-
         parts = []
 
-        # Material Grade
-        mg = row.get("Material_Grade")
-        if pd.notna(mg) and str(mg).strip():
-            parts.append(str(mg).strip())
+        def _add(val, prefix=""):
+            if val is None:
+                return
+            try:
+                if pd.isna(val):
+                    return
+            except Exception:
+                pass
+            s = str(val).strip()
+            if not s or s in ("-", "nan", "None", "null"):
+                return
+            parts.append(f"{prefix}{s}" if prefix else s)
 
-        # Application
-        app = row.get("Application")
-        if pd.notna(app) and str(app).strip():
-            parts.append(str(app).strip())
-
-        # Nominal Diameter
-        dia = row.get("Nominal_Diameter_mm")
-        try:
-            d_val = float(dia) if pd.notna(dia) else 0.0
-        except Exception:
-            d_val = 0.0
-        if d_val > 0:
-            if d_val == int(d_val):
-                parts.append(f"{int(d_val)} mm")
-            else:
-                parts.append(f"{d_val:g} mm")
-
-        # Wall Thickness
-        wall = row.get("Wall_Thickness_mm")
-        try:
-            w_val = float(wall) if pd.notna(wall) else 0.0
-        except Exception:
-            w_val = 0.0
-        if w_val > 0:
-            if w_val == int(w_val):
-                parts.append(f"WT {int(w_val)} mm")
-            else:
-                parts.append(f"WT {w_val:g} mm")
-
-        # SDR
-        sdr = row.get("SDR")
-        if pd.notna(sdr) and str(sdr).strip():
-            sdr_str = str(sdr).strip()
-            if sdr_str.upper().startswith("SDR"):
-                parts.append(sdr_str)
-            else:
-                parts.append(f"SDR {sdr_str}")
-
-        # Color
-        col = row.get("Color")
-        if pd.notna(col) and str(col).strip():
-            parts.append(str(col).strip())
+        _add(row.get("Material_Grade"))
+        _add(row.get("Application"))
+        _add(row.get("Nominal_Diameter_mm"))
+        _add(row.get("Wall_Thickness_mm"), "WT ")
+        _add(row.get("SDR"), "SDR ")
+        _add(row.get("Color"))
+        _add(row.get("Unit"))
 
         lookup[iid] = " | ".join(parts)
     return lookup
@@ -335,7 +300,6 @@ ITEM_LOOKUP = build_item_lookup(items)
 
 
 def auto_description(item_id):
-    """Return auto-generated description for an Item_ID."""
     if not item_id or item_id == "(none)":
         return ""
     return ITEM_LOOKUP.get(str(item_id), "")
@@ -527,10 +491,6 @@ def logo_html():
     </svg>"""
 
 
-# =========================================================
-# CHALLAN HTML BUILDER
-# =========================================================
-
 def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
     challan_no = header_row.get("challan_no", "") or ""
     challan_date = fmt_date_only(header_row.get("challan_date", ""))
@@ -590,7 +550,6 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 <style>
 .challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
 padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
-
 .challan-page .hdr-flex{{display:flex;align-items:center;gap:16px;
 margin-bottom:10px;padding-bottom:12px;border-bottom:2px solid #000;}}
 .challan-page .logo-left{{width:130px;flex-shrink:0;text-align:left;}}
@@ -600,24 +559,20 @@ margin-bottom:10px;padding-bottom:12px;border-bottom:2px solid #000;}}
 margin:0 0 6px 0;color:#000;}}
 .challan-page .caddr{{font-size:10px;line-height:1.55;color:#000;}}
 .challan-page .caddr-line{{margin:1px 0;}}
-
 .challan-page .meta-row{{display:flex;justify-content:space-between;
 font-size:12px;margin:12px 0 10px 0;gap:20px;padding:8px 0;
 border-top:1px solid #000;border-bottom:1px solid #000;}}
 .challan-page .meta-row b{{font-weight:900;}}
 .challan-page .meta-row span{{font-weight:400;}}
-
 .challan-page .bar{{background:#000;color:#fff;text-align:center;
 font-weight:900;font-size:18px;letter-spacing:3px;padding:10px 0;
 margin:8px 0 12px 0;}}
-
 .challan-page table{{width:100%;border-collapse:collapse;font-size:11px;}}
 .challan-page th,.challan-page td{{border:1px solid #000;padding:6px 8px;
 vertical-align:middle;height:22px;}}
 .challan-page th{{background:#f2f2f2;font-weight:900;text-transform:uppercase;
 font-size:12px;padding:8px;text-align:center;}}
 .challan-page td.c{{text-align:center;}}
-
 .challan-page .ftr{{display:flex;justify-content:space-between;
 margin-top:60px;font-size:11px;font-weight:900;gap:20px;}}
 .challan-page .sig{{width:30%;text-align:center;}}
@@ -626,7 +581,6 @@ font-weight:700;margin-bottom:6px;color:#000;padding-top:6px;}}
 .challan-page .sig-line{{border-top:1.5px solid #000;margin:0 auto;width:100%;}}
 .challan-page .sig-label{{text-transform:uppercase;letter-spacing:0.5px;
 padding-top:5px;font-weight:900;}}
-
 @media print{{
   body *{{visibility:hidden;}}
   #challan-print, #challan-print *{{visibility:visible;}}
@@ -832,9 +786,6 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.code(str(e))
 
 
-# =========================================================
-# CHALLAN ITEMS EDITOR — Full auto-fill description
-# =========================================================
 
 def challan_items_editor(key_prefix):
     state_key = f"{key_prefix}_rows"
@@ -876,7 +827,6 @@ def challan_items_editor(key_prefix):
                     key=f"{key_prefix}_item_{rid}",
                     label_visibility="collapsed"
                 )
-                # Auto-fill description whenever Item changes
                 if new_val != cur:
                     row["item_id"] = new_val
                     row["description"] = auto_description(new_val)
@@ -949,10 +899,6 @@ def reset_challan_rows(key_prefix):
     st.session_state[counter_key] = 1
 
 
-# =========================================================
-# CHALLAN MODULE — sidebar list + right PDF print
-# =========================================================
-
 def render_challan_module(
     page_title, challan_table, challan_items_table,
     challan_df, challan_items_df,
@@ -971,9 +917,6 @@ def render_challan_module(
         "View / Print", "Create", "Update / Delete", "Manage Items"
     ])
 
-    # =====================================================
-    # VIEW / PRINT
-    # =====================================================
     with tab1:
         if challan_df.empty:
             st.info(f"No {page_title.lower()} records yet.")
@@ -1116,9 +1059,6 @@ def render_challan_module(
                         use_container_width=True, hide_index=True
                     )
 
-    # =====================================================
-    # CREATE
-    # =====================================================
     with tab2:
         next_no = next_challan_no(challan_df, challan_no_prefix)
         st.info(f"Next Challan No: {next_no}")
@@ -1184,9 +1124,6 @@ def render_challan_module(
                         h = rls_hint(str(e), challan_table, "insert")
                         if h: st.info(h)
 
-    # =====================================================
-    # UPDATE / DELETE
-    # =====================================================
     with tab3:
         if challan_df.empty:
             st.info("No challans.")
@@ -1252,9 +1189,6 @@ def render_challan_module(
                     st.error("Delete failed.")
                     st.code(str(e))
 
-    # =====================================================
-    # MANAGE ITEMS
-    # =====================================================
     with tab4:
         if challan_df.empty:
             st.info("No challans.")
@@ -1385,9 +1319,120 @@ def render_challan_module(
                         st.code(str(e))
 
 
-# =========================================================
-# SIDEBAR
-# =========================================================
+def bulk_import_items_page():
+    st.title("Bulk Import Items")
+    st.caption("Upload CSV to insert items into Item_Registration. Item_ID auto-generates as ITM-001, ITM-002, ...")
+
+    st.markdown("---")
+    st.markdown("#### 1. Upload CSV")
+
+    uploaded = st.file_uploader("Choose CSV file", type=["csv"], key="csv_bulk")
+    if uploaded is None:
+        st.info("Please upload a CSV file to continue.")
+        return
+
+    try:
+        df = pd.read_csv(uploaded, dtype=str).fillna("")
+    except Exception as e:
+        st.error(f"Failed to read CSV: {e}")
+        return
+
+    st.success(f"CSV loaded: **{len(df)} rows**")
+
+    st.markdown("#### 2. Preview")
+    st.dataframe(df.head(20), use_container_width=True)
+
+    has_item_id_col = "Item_ID" in df.columns
+
+    st.markdown("#### 3. Options")
+    c1, c2 = st.columns(2)
+    with c1:
+        sort_opt = st.selectbox(
+            "Order of insertion",
+            ["By original Item_ID (numeric ascending)",
+             "As in CSV (top to bottom)"]
+        )
+    with c2:
+        start_num = st.number_input("Start numbering from", min_value=1, value=1, step=1)
+
+    work_df = df.copy()
+    if sort_opt.startswith("By original") and has_item_id_col:
+        work_df["_orig"] = pd.to_numeric(work_df["Item_ID"], errors="coerce").fillna(999999)
+        work_df = work_df.sort_values("_orig").reset_index(drop=True)
+    else:
+        work_df = work_df.reset_index(drop=True)
+
+    def _clean(v):
+        if v is None:
+            return ""
+        s = str(v).strip()
+        if s.lower() in ("nan", "none", "null"):
+            return ""
+        return s
+
+    payloads = []
+    for idx, row in work_df.iterrows():
+        new_id = f"ITM-{int(start_num) + idx:03d}"
+        payloads.append({
+            "Item_ID": new_id,
+            "Item_Code": _clean(row.get("Item_Code", "")),
+            "Material_Grade": _clean(row.get("Material_Grade", "")),
+            "Application": _clean(row.get("Application", "")),
+            "Nominal_Diameter_mm": _clean(row.get("Nominal_Diameter_mm", "")),
+            "Wall_Thickness_mm": _clean(row.get("Wall_Thickness_mm", "")),
+            "SDR": _clean(row.get("SDR", "")),
+            "Color": _clean(row.get("Color", "")),
+            "Standard_Length": _clean(row.get("Standard_Length", "")),
+            "Unit": _clean(row.get("Unit", "")),
+        })
+
+    preview_df = pd.DataFrame(payloads)
+    st.dataframe(preview_df.head(20), use_container_width=True)
+    st.caption(f"Total: {len(payloads)} records. Showing first 20.")
+
+    st.markdown("---")
+    st.markdown("#### 4. Insert")
+
+    if st.button("Insert All Records", type="primary", key="bulk_insert_btn"):
+        progress = st.progress(0)
+        status = st.empty()
+
+        total = len(payloads)
+        inserted = 0
+        failed = 0
+        errors_list = []
+
+        BATCH = 50
+        for i in range(0, total, BATCH):
+            batch = payloads[i:i + BATCH]
+            try:
+                supabase.table(ITEM_TABLE).insert(batch).execute()
+                inserted += len(batch)
+                status.text(f"Inserted {inserted}/{total}")
+                progress.progress(min(inserted / total, 1.0))
+            except Exception as e:
+                for p in batch:
+                    try:
+                        supabase.table(ITEM_TABLE).insert(p).execute()
+                        inserted += 1
+                    except Exception as ee:
+                        failed += 1
+                        errors_list.append(f"{p['Item_ID']}: {str(ee)[:100]}")
+                status.text(f"Inserted {inserted}/{total} (some failed)")
+                progress.progress(min((i + len(batch)) / total, 1.0))
+
+        progress.progress(1.0)
+
+        st.markdown("---")
+        st.success(f"✅ **Done!** Inserted: {inserted} | Failed: {failed}")
+
+        if errors_list:
+            with st.expander(f"⚠️ {len(errors_list)} error(s)"):
+                for e in errors_list[:50]:
+                    st.code(e)
+
+        refresh_all()
+
 
 with st.sidebar:
     if os.path.exists("logo.png"):
@@ -1416,6 +1461,7 @@ with st.sidebar:
         [
             "Executive Dashboard",
             "Item Registration",
+            "Bulk Import Items",
             "Production",
             "Stock Control",
             "Stock Adjustment",
@@ -1438,6 +1484,10 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+
+# =========================================================
+# PAGE ROUTING
+# =========================================================
 
 if page == "Executive Dashboard":
     st.title("Executive Dashboard")
@@ -1486,39 +1536,9 @@ if page == "Executive Dashboard":
     c4.metric("Returned", f"{t['returned']:,.0f}")
     c5.metric("Adjusted", f"{t['adjusted']:,.0f}")
 
-    st.markdown("---")
 
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Production Status")
-        if not production.empty:
-            sdf = (production["Production_Status"].fillna("Unknown")
-                   .value_counts().rename_axis("Status").reset_index(name="Count"))
-            st.plotly_chart(px.pie(sdf, names="Status", values="Count", hole=0.5),
-                            use_container_width=True)
-        else:
-            empty_state("No production records found.")
-
-    with right:
-        st.subheader("Production by Machine")
-        if not production.empty and "Production_Line" in production.columns:
-            mdf = production.groupby("Production_Line", as_index=False)[
-                ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"]
-            ].sum()
-            st.plotly_chart(
-                px.bar(mdf, x="Production_Line",
-                       y=["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"],
-                       barmode="group"),
-                use_container_width=True
-            )
-        else:
-            empty_state("No production records found.")
-
-    st.subheader("Stock Ledger")
-    if not STOCK_LEDGER.empty:
-        st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
-    else:
-        empty_state("No ledger data available.")
+elif page == "Bulk Import Items":
+    bulk_import_items_page()
 
 
 elif page == "Item Registration":
@@ -1531,7 +1551,7 @@ elif page == "Item Registration":
 
     with tab1:
         search = st.text_input("Search Item",
-                               placeholder="Item ID, Item Code, Grade...")
+                               placeholder="Item ID, Item Code, Material Grade...")
         display = filter_df(items, search)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
@@ -1544,15 +1564,15 @@ elif page == "Item Registration":
             c1, c2, c3 = st.columns(3)
             with c1:
                 item_code = st.text_input("Item Code")
-                material_grade = st.selectbox("Material Grade", ["PE-80", "PE-100"])
+                material_grade = st.text_input("Material Grade")
                 application = st.text_input("Application")
             with c2:
-                diameter = st.number_input("Nominal Diameter (mm)", min_value=1, value=1, step=1)
-                wall = st.number_input("Wall Thickness (mm)", min_value=1, value=1, step=1)
+                diameter = st.text_input("Nominal Diameter (mm)")
+                wall = st.text_input("Wall Thickness (mm)")
                 sdr = st.text_input("SDR")
             with c3:
                 color = st.text_input("Color")
-                standard_length = st.number_input("Standard Length", min_value=1, value=1, step=1)
+                standard_length = st.text_input("Standard Length")
                 unit = st.text_input("Unit", value="Meter")
             submit = st.form_submit_button("Add Item", type="primary")
 
@@ -1561,13 +1581,13 @@ elif page == "Item Registration":
                 supabase.table(ITEM_TABLE).insert({
                     "Item_ID": next_item_id,
                     "Item_Code": item_code.strip(),
-                    "Material_Grade": material_grade,
+                    "Material_Grade": material_grade.strip(),
                     "Application": application.strip(),
-                    "Nominal_Diameter_mm": diameter,
-                    "Wall_Thickness_mm": wall,
+                    "Nominal_Diameter_mm": diameter.strip(),
+                    "Wall_Thickness_mm": wall.strip(),
                     "SDR": sdr.strip(),
                     "Color": color.strip(),
-                    "Standard_Length": standard_length,
+                    "Standard_Length": standard_length.strip(),
                     "Unit": unit.strip()
                 }).execute()
                 st.success(f"Item {next_item_id} added.")
@@ -1584,40 +1604,38 @@ elif page == "Item Registration":
                                        items["Item_ID"].astype(str).tolist())
             selected = items.loc[items["Item_ID"].astype(str) == selected_id].iloc[0]
 
+            def _v(col):
+                v = selected.get(col)
+                return str(v) if pd.notna(v) else ""
+
             with st.form("update_item_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    new_code = st.text_input("Item Code",
-                        value=str(selected["Item_Code"]) if pd.notna(selected["Item_Code"]) else "")
-                    new_grade = st.selectbox("Material Grade", ["PE-80", "PE-100"],
-                        index=(1 if str(selected["Material_Grade"]) == "PE-100" else 0))
-                    new_application = st.text_input("Application",
-                        value=str(selected["Application"]) if pd.notna(selected["Application"]) else "")
+                    new_code = st.text_input("Item Code", value=_v("Item_Code"))
+                    new_grade = st.text_input("Material Grade", value=_v("Material_Grade"))
+                    new_application = st.text_input("Application", value=_v("Application"))
                 with c2:
-                    new_diameter = st.number_input("Nominal Diameter (mm)", min_value=1,
-                        value=max(1, int(selected["Nominal_Diameter_mm"])), step=1)
-                    new_wall = st.number_input("Wall Thickness (mm)", min_value=1,
-                        value=max(1, int(selected["Wall_Thickness_mm"])), step=1)
-                    new_sdr = st.text_input("SDR",
-                        value=str(selected["SDR"]) if pd.notna(selected["SDR"]) else "")
+                    new_diameter = st.text_input("Nominal Diameter (mm)", value=_v("Nominal_Diameter_mm"))
+                    new_wall = st.text_input("Wall Thickness (mm)", value=_v("Wall_Thickness_mm"))
+                    new_sdr = st.text_input("SDR", value=_v("SDR"))
                 with c3:
-                    new_color = st.text_input("Color",
-                        value=str(selected["Color"]) if pd.notna(selected["Color"]) else "")
-                    new_length = st.number_input("Standard Length", min_value=1,
-                        value=max(1, int(selected["Standard_Length"])), step=1)
-                    new_unit = st.text_input("Unit",
-                        value=str(selected["Unit"]) if pd.notna(selected["Unit"]) else "")
+                    new_color = st.text_input("Color", value=_v("Color"))
+                    new_length = st.text_input("Standard Length", value=_v("Standard_Length"))
+                    new_unit = st.text_input("Unit", value=_v("Unit"))
                 update = st.form_submit_button("Update Item", type="primary")
 
             if update:
                 try:
                     supabase.table(ITEM_TABLE).update({
-                        "Item_Code": new_code, "Material_Grade": new_grade,
-                        "Application": new_application,
-                        "Nominal_Diameter_mm": new_diameter,
-                        "Wall_Thickness_mm": new_wall, "SDR": new_sdr,
-                        "Color": new_color, "Standard_Length": new_length,
-                        "Unit": new_unit
+                        "Item_Code": new_code.strip(),
+                        "Material_Grade": new_grade.strip(),
+                        "Application": new_application.strip(),
+                        "Nominal_Diameter_mm": new_diameter.strip(),
+                        "Wall_Thickness_mm": new_wall.strip(),
+                        "SDR": new_sdr.strip(),
+                        "Color": new_color.strip(),
+                        "Standard_Length": new_length.strip(),
+                        "Unit": new_unit.strip()
                     }).eq("Item_ID", selected_id).execute()
                     st.success("Item updated.")
                     refresh_all()
@@ -2046,19 +2064,6 @@ elif page == "Analytics":
     else:
         empty_state("No production data.")
 
-    st.markdown("---")
-    st.subheader("Stock Ledger")
-    if not STOCK_LEDGER.empty:
-        st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
-        cols = ["Opening", "Produced", "Dispatched",
-                "Returned", "Adjusted", "Closing"]
-        st.plotly_chart(
-            px.bar(STOCK_LEDGER, x="Item_ID", y=cols, barmode="group"),
-            use_container_width=True
-        )
-    else:
-        empty_state("No stock data.")
-
 
 elif page == "Custom Charts":
     st.title("Custom Charts")
@@ -2085,21 +2090,6 @@ elif page == "Custom Charts":
         empty_state(f"{src} has no records.")
         st.stop()
 
-    with st.expander("Filters", expanded=False):
-        fcols = st.multiselect("Filter by column",
-            options=[c for c in df.columns
-                     if df[c].dtype == "object" or df[c].nunique() < 30],
-            default=[])
-        for col in fcols:
-            uv = df[col].dropna().astype(str).unique().tolist()
-            if not uv: continue
-            picked = st.multiselect(f"{col}", uv, default=uv, key=f"f_{col}")
-            df = df[df[col].astype(str).isin(picked)]
-
-    if df.empty:
-        st.warning("No data after filters.")
-        st.stop()
-
     num_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
     all_cols = df.columns.tolist()
 
@@ -2117,72 +2107,35 @@ elif page == "Custom Charts":
     with c3:
         cb = st.selectbox("Color / Group by", ["(none)"] + all_cols)
 
-    agg = "None"
-    if cht not in ["Histogram", "Scatter Plot", "Box Plot"]:
-        agg = st.selectbox("Aggregation", ["sum", "mean", "count", "max", "min"])
-
-    top_n = st.slider("Top N (0 = all)", 0, 50, 0)
-    srt = st.radio("Sort order", ["Descending", "Ascending", "None"], horizontal=True)
-
-    plot_df = df.copy()
     try:
-        if agg != "None" and cht not in ["Histogram", "Scatter Plot", "Box Plot"]:
-            gcols = [x]
-            if cb != "(none)" and cb != x:
-                gcols.append(cb)
-            if agg == "count":
-                plot_df = (plot_df.groupby(gcols)[y].count().reset_index()
-                           .rename(columns={y: "count"}))
-                yp = "count"
-            else:
-                plot_df = plot_df.groupby(gcols)[y].agg(agg).reset_index()
-                yp = y
-        else:
-            yp = y
-
-        if agg != "None" and yp in plot_df.columns and srt != "None":
-            plot_df = plot_df.sort_values(yp, ascending=(srt == "Ascending"))
-        if top_n > 0 and yp in plot_df.columns:
-            plot_df = plot_df.head(top_n)
-
-        carg = cb if cb != "(none)" else None
-
         if cht == "Bar Chart":
-            fig = px.bar(plot_df, x=x, y=yp, color=carg, text_auto=True)
+            fig = px.bar(df, x=x, y=y, color=(cb if cb != "(none)" else None), text_auto=True)
         elif cht == "Grouped Bar Chart":
-            fig = px.bar(plot_df, x=x, y=yp, color=carg, barmode="group")
+            fig = px.bar(df, x=x, y=y, color=(cb if cb != "(none)" else None), barmode="group")
         elif cht == "Stacked Bar Chart":
-            fig = px.bar(plot_df, x=x, y=yp, color=carg, barmode="stack")
+            fig = px.bar(df, x=x, y=y, color=(cb if cb != "(none)" else None), barmode="stack")
         elif cht == "Line Chart":
-            fig = px.line(plot_df, x=x, y=yp, color=carg, markers=True)
+            fig = px.line(df, x=x, y=y, color=(cb if cb != "(none)" else None), markers=True)
         elif cht == "Area Chart":
-            fig = px.area(plot_df, x=x, y=yp, color=carg)
+            fig = px.area(df, x=x, y=y, color=(cb if cb != "(none)" else None))
         elif cht == "Pie Chart":
-            fig = px.pie(plot_df, names=x, values=yp)
+            fig = px.pie(df, names=x, values=y)
         elif cht == "Donut Chart":
-            fig = px.pie(plot_df, names=x, values=yp, hole=0.5)
+            fig = px.pie(df, names=x, values=y, hole=0.5)
         elif cht == "Scatter Plot":
-            fig = px.scatter(plot_df, x=x, y=yp, color=carg)
+            fig = px.scatter(df, x=x, y=y, color=(cb if cb != "(none)" else None))
         elif cht == "Histogram":
-            fig = px.histogram(plot_df, x=x, color=carg)
+            fig = px.histogram(df, x=x, color=(cb if cb != "(none)" else None))
         elif cht == "Box Plot":
-            fig = px.box(plot_df, x=x, y=yp, color=carg)
+            fig = px.box(df, x=x, y=y, color=(cb if cb != "(none)" else None))
         else:
             fig = None
 
         if fig is not None:
             fig.update_layout(margin=dict(l=10, r=10, t=40, b=10), height=520)
             st.plotly_chart(fig, use_container_width=True)
-
-        with st.expander("View underlying data"):
-            st.dataframe(plot_df, use_container_width=True, hide_index=True)
-
-        csv = plot_df.to_csv(index=False).encode("utf-8")
-        st.download_button("Download CSV", csv,
-                           file_name=f"chart_{src.lower().replace(' ', '_')}.csv",
-                           mime="text/csv")
     except Exception as e:
-        st.error("Chart build error.")
+        st.error("Chart error.")
         st.code(str(e))
 
 
