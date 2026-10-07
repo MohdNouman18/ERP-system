@@ -483,9 +483,9 @@ LOGO_B64 = get_logo_base64()
 
 def logo_html():
     if LOGO_B64:
-        return f'<img src="{LOGO_B64}" style="width:130px;height:auto;display:block;margin:0 auto;" alt="Logo"/>'
+        return f'<img src="{LOGO_B64}" style="width:120px;height:auto;display:block;" alt="Logo"/>'
     return """<svg viewBox="0 0 100 80" xmlns="http://www.w3.org/2000/svg"
-                style="width:130px;height:auto;display:block;margin:0 auto;">
+                style="width:120px;height:auto;display:block;">
         <g fill="#000">
             <path d="M5 55 L25 25 L40 25 L20 55 Z"/>
             <path d="M30 60 L50 20 L65 20 L45 60 Z"/>
@@ -517,7 +517,7 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
     sent_by_val = _clean(header_row.get("sent_by", ""))
 
     rows_html = ""
-    MIN_ROWS = 15
+    MIN_ROWS = 10
     count = 0
 
     if items_df is not None and not items_df.empty:
@@ -574,13 +574,19 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 <style>
 .challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
 padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
-.challan-page .hdr-center{{text-align:center;margin-bottom:10px;
-padding-bottom:12px;border-bottom:2px solid #000;}}
-.challan-page .logo-center{{text-align:center;margin-bottom:8px;}}
-.challan-page .cname{{font-size:24px;font-weight:900;letter-spacing:1px;
-margin:6px 0 6px 0;color:#000;}}
-.challan-page .caddr{{font-size:10px;line-height:1.55;color:#000;}}
+
+/* ---- HEADER: LOGO LEFT, LETTERHEAD CENTER ---- */
+.challan-page .hdr-flex{{display:flex;align-items:center;gap:12px;
+margin-bottom:10px;padding-bottom:12px;border-bottom:2px solid #000;}}
+.challan-page .logo-left{{width:130px;flex-shrink:0;text-align:left;}}
+.challan-page .logo-left img{{width:120px;height:auto;display:block;}}
+.challan-page .logo-left svg{{width:120px;height:auto;display:block;}}
+.challan-page .letterhead{{flex:1;text-align:center;padding-right:130px;}}
+.challan-page .cname{{font-size:22px;font-weight:900;letter-spacing:1px;
+margin:0 0 5px 0;color:#000;}}
+.challan-page .caddr{{font-size:10px;line-height:1.5;color:#000;}}
 .challan-page .caddr-line{{margin:1px 0;}}
+
 .challan-page .meta-row{{display:flex;justify-content:space-between;
 font-size:12px;margin:12px 0 8px 0;gap:20px;padding:6px 0;}}
 .challan-page .meta-row b{{font-weight:900;}}
@@ -613,21 +619,42 @@ justify-content:flex-end;}}
 .challan-page .stamp-box{{width:180px;height:90px;border:1.5px dashed #555;
 display:flex;align-items:center;justify-content:center;
 color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
+
 @media print{{
   body *{{visibility:hidden;}}
   #challan-print, #challan-print *{{visibility:visible;}}
-  #challan-print{{position:absolute;left:0;top:0;width:100%;padding:0;}}
-  @page{{margin:12mm;}}
+  #challan-print{{position:absolute;left:0;top:0;width:100%;padding:0;
+                 font-size:11px;}}
+  #challan-print .hdr-flex{{margin-bottom:6px;padding-bottom:8px;gap:8px;}}
+  #challan-print .logo-left{{width:110px;}}
+  #challan-print .logo-left img, #challan-print .logo-left svg{{width:100px;}}
+  #challan-print .letterhead{{padding-right:110px;}}
+  #challan-print .cname{{font-size:18px;margin:0 0 3px 0;}}
+  #challan-print .caddr{{font-size:9px;line-height:1.3;}}
+  #challan-print .meta-row{{font-size:11px;margin:8px 0 6px 0;padding:4px 0;}}
+  #challan-print .cust-box{{padding:6px 10px;margin:6px 0 8px 0;}}
+  #challan-print .cust-grid{{font-size:10px;gap:4px 16px;}}
+  #challan-print .bar{{font-size:16px;padding:7px 0;margin:6px 0 8px 0;}}
+  #challan-print th, #challan-print td{{padding:4px 6px;
+    font-size:10.5px;height:18px;}}
+  #challan-print th{{padding:6px;font-size:11px;}}
+  #challan-print .ftr{{margin-top:30px;font-size:10px;}}
+  #challan-print .sig-value{{min-height:16px;font-size:11px;padding-top:3px;}}
+  #challan-print .stamp-area{{margin-top:20px;}}
+  #challan-print .stamp-box{{width:140px;height:70px;font-size:10px;}}
+  @page{{margin:10mm; size:A4 portrait;}}
 }}
 </style>
 
-<div class="hdr-center">
-  <div class="logo-center">{logo_markup}</div>
-  <div class="cname">{COMPANY_NAME}</div>
-  <div class="caddr">
-    <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
-    <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
-    <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
+<div class="hdr-flex">
+  <div class="logo-left">{logo_markup}</div>
+  <div class="letterhead">
+    <div class="cname">{COMPANY_NAME}</div>
+    <div class="caddr">
+      <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
+      <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
+      <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
+    </div>
   </div>
 </div>
 
@@ -1162,7 +1189,6 @@ def bulk_import_page():
                     st.code(e)
 
         refresh_all()
-
 
 
 # =========================================================
