@@ -2412,7 +2412,9 @@ elif page == "Delivery Challan":
                     with c1:
                         ce_dc = str(er_dc["item_id"]) if pd.notna(er_dc["item_id"]) else "(none)"
                         if item_options_dc:
-                            idx = item_options_dc.index(ce_dc) + 1 if ce_dc in item_options_dc else 0                            ei_dc = st.selectbox("Item ID",
+                                        
+                            idx = item_options_dc.index(ce_dc) + 1 if ce_dc in item_options_dc else 0
+                            ei_dc = st.selectbox("Item ID",
                                 ["(none)"] + item_options_dc, index=idx,
                                 key="edit_ci_dc")
                         else:
