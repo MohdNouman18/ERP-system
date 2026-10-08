@@ -285,15 +285,15 @@ def load_all_data():
 
 
 # =========================================================
-# ITEM LOOKUP — 3 attributes only
-# Format: Material_Grade - Nominal_Diameter_mm - Color
+# ITEM LOOKUP — 4 attributes only
+# Format: Material_Grade - Nominal_Diameter_mm - SDR - Color
 # =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_item_lookup(items_df):
     """
     Item_ID -> description string.
-    ONLY 3 attributes: Material Grade - Nominal Diameter - Color
+    ONLY 4 attributes: Material_Grade - Nominal_Diameter_mm - SDR - Color
     Empty attributes are skipped.
     """
     if items_df.empty:
@@ -321,6 +321,7 @@ def build_item_lookup(items_df):
 
         _add(row.get("Material_Grade"))
         _add(row.get("Nominal_Diameter_mm"))
+        _add(row.get("SDR"))
         _add(row.get("Color"))
 
         lookup[iid] = " - ".join(parts)
@@ -645,7 +646,6 @@ color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
   @page{{margin:10mm; size:A4 portrait;}}
 }}
 """
-
 
 
 # =========================================================
@@ -1117,7 +1117,12 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.code(str(e))
 
 
+# =========================================================
+# CHALLAN ITEMS EDITOR — AUTO-FILL DESCRIPTION
+# =========================================================
+
 def challan_items_editor(key_prefix):
+    """Auto-fill description: Material - Diameter - SDR - Color"""
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -1180,9 +1185,13 @@ def challan_items_editor(key_prefix):
                 )
 
         with c3:
+            # DYNAMIC KEY: changes when item_id changes → forces refresh
+            current_item = row.get("item_id", "(none)")
+            default_desc = row.get("description", "") or auto_description(current_item)
             row["description"] = st.text_input(
-                "Description", value=row.get("description", ""),
-                key=f"{key_prefix}_desc_{rid}",
+                "Description",
+                value=default_desc,
+                key=f"{key_prefix}_desc_{rid}_{current_item}",
                 label_visibility="collapsed"
             )
 
@@ -1227,6 +1236,10 @@ def challan_items_editor(key_prefix):
 
     return st.session_state[state_key]
 
+
+# =========================================================
+# INVOICE ITEMS EDITOR — AUTO-FILL DESCRIPTION + AUTO AMOUNT
+# =========================================================
 
 def invoice_items_editor(key_prefix):
     state_key = f"{key_prefix}_rows"
@@ -1294,9 +1307,12 @@ def invoice_items_editor(key_prefix):
                 )
 
         with c3:
+            current_item = row.get("item_id", "(none)")
+            default_desc = row.get("description", "") or auto_description(current_item)
             row["description"] = st.text_input(
-                "Description", value=row.get("description", ""),
-                key=f"{key_prefix}_desc_{rid}",
+                "Description",
+                value=default_desc,
+                key=f"{key_prefix}_desc_{rid}_{current_item}",
                 label_visibility="collapsed"
             )
 
@@ -1433,7 +1449,6 @@ NUMERIC_TARGETS = {
 def bulk_import_page():
     st.title("Bulk Import")
     st.caption("Upload CSV to import data into any ERP table.")
-
     st.markdown("---")
     st.markdown("#### 1. Select Target Table")
     target_name = st.selectbox("Which table do you want to import to?",
@@ -1455,7 +1470,6 @@ def bulk_import_page():
     st.markdown("#### 2. Upload CSV")
     uploaded = st.file_uploader("Choose CSV file", type=["csv"],
                                  key=f"csv_{target_name}")
-
     if uploaded is None:
         st.info("Please upload a CSV file to continue.")
         return
@@ -1478,8 +1492,7 @@ def bulk_import_page():
             start_num = st.number_input(
                 f"Start numbering for {auto_id_col} from",
                 min_value=1, value=1, step=1,
-                help=f"e.g. 1 → {auto_id_prefix}-001"
-            )
+                help=f"e.g. 1 → {auto_id_prefix}-001")
         with c2:
             st.info(f"New IDs: `{auto_id_prefix}-{int(start_num):03d}`, "
                     f"`{auto_id_prefix}-{int(start_num) + 1:03d}`, ...")
@@ -1497,7 +1510,6 @@ def bulk_import_page():
         record = {}
         if has_auto_id:
             record[auto_id_col] = f"{auto_id_prefix}-{int(start_num) + idx:03d}"
-
         for col in target_cols:
             if col == auto_id_col and has_auto_id:
                 continue
@@ -1509,7 +1521,6 @@ def bulk_import_page():
                     except Exception:
                         val = 0.0
                 record[col] = val if val != "" else None
-
         payloads.append(record)
 
     st.markdown("#### 5. Preview (First 20 Rows)")
@@ -2412,7 +2423,6 @@ elif page == "Delivery Challan":
                     with c1:
                         ce_dc = str(er_dc["item_id"]) if pd.notna(er_dc["item_id"]) else "(none)"
                         if item_options_dc:
-                                        
                             idx = item_options_dc.index(ce_dc) + 1 if ce_dc in item_options_dc else 0
                             ei_dc = st.selectbox("Item ID",
                                 ["(none)"] + item_options_dc, index=idx,
@@ -2967,7 +2977,6 @@ elif page == "Invoice":
                                                value=0.0, step=0.01,
                                                format="%.2f", key="inv_out")
 
-        # Signature fields — manual
         st.markdown("#### Signature Fields (Manual Entry)")
         csig1, csig2, csig3 = st.columns(3)
         with csig1:
