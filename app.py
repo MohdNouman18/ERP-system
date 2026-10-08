@@ -74,7 +74,8 @@ INVOICE_COLUMNS = (
     "invoice_id", "invoice_no", "invoice_date", "customer_name",
     "contact_detail", "dc_id", "sales_head", "bank", "payment_mode",
     "cartage", "amount_received", "current_bill_amt", "outstanding",
-    "remarks", "created_at"
+    "remarks", "prepared_by", "received_by", "authorized_signatory",
+    "created_at"
 )
 INVOICE_ITEMS_COLUMNS = (
     "invoice_item_id", "invoice_id", "sr_no", "item_id",
@@ -284,14 +285,15 @@ def load_all_data():
 
 
 # =========================================================
-# ITEM LOOKUP — Full auto description with " - " separator
+# ITEM LOOKUP — 3 attributes only
+# Format: Material_Grade - Nominal_Diameter_mm - Color
 # =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_item_lookup(items_df):
     """
-    Item_ID -> full auto description.
-    Format: Material Grade - Application - Dia - Wall Thickness - SDR - Color - Standard Length - Unit
+    Item_ID -> description string.
+    ONLY 3 attributes: Material Grade - Nominal Diameter - Color
     Empty attributes are skipped.
     """
     if items_df.empty:
@@ -304,7 +306,7 @@ def build_item_lookup(items_df):
 
         parts = []
 
-        def _add(val, prefix=""):
+        def _add(val):
             if val is None:
                 return
             try:
@@ -315,18 +317,12 @@ def build_item_lookup(items_df):
             s = str(val).strip()
             if not s or s in ("-", "nan", "None", "null"):
                 return
-            parts.append(f"{prefix}{s}" if prefix else s)
+            parts.append(s)
 
         _add(row.get("Material_Grade"))
-        _add(row.get("Application"))
         _add(row.get("Nominal_Diameter_mm"))
-        _add(row.get("Wall_Thickness_mm"), "WT ")
-        _add(row.get("SDR"), "SDR ")
         _add(row.get("Color"))
-        _add(row.get("Standard_Length"), "L ")
-        _add(row.get("Unit"))
 
-        # Join with " - " separator
         lookup[iid] = " - ".join(parts)
     return lookup
 
@@ -465,7 +461,6 @@ def get_item_options(items_df):
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_dc_options(challans_df):
-    """Return list of (label, challan_id) for DC dropdown."""
     if challans_df.empty:
         return []
     opts = []
@@ -560,11 +555,6 @@ def logo_html():
     </svg>"""
 
 
-
-# =========================================================
-# SHARED LETTERHEAD BLOCK (used by Challan + Invoice)
-# =========================================================
-
 def _letterhead_block():
     logo_markup = logo_html()
     return f"""
@@ -655,6 +645,7 @@ color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
   @page{{margin:10mm; size:A4 portrait;}}
 }}
 """
+
 
 
 # =========================================================
@@ -797,8 +788,10 @@ def build_invoice_html(header_row, items_df):
     customer_name = _clean(header_row.get("customer_name", ""))
     contact_detail = _clean(header_row.get("contact_detail", ""))
     sales_head = _clean(header_row.get("sales_head", ""))
+    prepared_by = _clean(header_row.get("prepared_by", ""))
+    received_by_sig = _clean(header_row.get("received_by", ""))
+    authorized_sig = _clean(header_row.get("authorized_signatory", ""))
     dc_id = header_row.get("dc_id")
-    # Lookup DC No from challans df
     dc_no = ""
     if dc_id is not None and not challans.empty:
         try:
@@ -887,7 +880,6 @@ def build_invoice_html(header_row, items_df):
     ]:
         customer_block += _cust_row(lbl, val)
 
-    # Client Profile section (bank, payment, cartage, amounts)
     profile_block = ""
     for lbl, val in [
         ("Bank", bank),
@@ -975,9 +967,9 @@ color:#000;padding-top:4px;border-top:2px solid #000;}
 </div>
 
 <div class="ftr">
-  {_sig_block("Prepared By", sales_head)}
-  {_sig_block("Received By", "")}
-  {_sig_block("Authorized Signatory", "")}
+  {_sig_block("Prepared By", prepared_by)}
+  {_sig_block("Received By", received_by_sig)}
+  {_sig_block("Authorized Signatory", authorized_sig)}
 </div>
 
 <div class="stamp-area">
@@ -1126,7 +1118,6 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
 
 
 def challan_items_editor(key_prefix):
-    """Auto-fill description from item lookup with '-' separator."""
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -1169,7 +1160,6 @@ def challan_items_editor(key_prefix):
                 if new_val != cur:
                     row["item_id"] = new_val
                     row["description"] = auto_description(new_val)
-                    # auto-set unit from item
                     try:
                         if not items.empty and new_val != "(none)":
                             m = items[items["Item_ID"].astype(str) == str(new_val)]
@@ -1239,7 +1229,6 @@ def challan_items_editor(key_prefix):
 
 
 def invoice_items_editor(key_prefix):
-    """Invoice items editor with price, amount + auto-fill description."""
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -1339,7 +1328,6 @@ def invoice_items_editor(key_prefix):
             row["price_per_unit"] = new_price
 
         with c7:
-            # Auto-calc amount = qty * price
             auto_amt = float(row.get("quantity", 0.0)) * float(row.get("price_per_unit", 0.0))
             row["amount"] = auto_amt
             st.markdown(
@@ -1395,63 +1383,40 @@ def reset_invoice_rows(key_prefix):
 # =========================================================
 
 IMPORT_TARGETS = {
-    "Item Registration": {
-        "table": ITEM_TABLE, "columns": list(ITEM_COLUMNS),
-        "auto_id_col": "Item_ID", "auto_id_prefix": "ITM", "has_auto_id": True,
-    },
-    "Production": {
-        "table": PRODUCTION_TABLE, "columns": list(PRODUCTION_COLUMNS),
-        "auto_id_col": "Production_ID", "auto_id_prefix": "PRD", "has_auto_id": True,
-    },
-    "Opening Stock": {
-        "table": OPENING_TABLE, "columns": list(OPENING_COLUMNS),
-        "auto_id_col": "Opening_Stock_ID", "auto_id_prefix": "OPN", "has_auto_id": True,
-    },
-    "Production Qty": {
-        "table": PRODUCTION_QTY_TABLE, "columns": list(PRODUCTION_QTY_COLUMNS),
-        "auto_id_col": "Production_ID", "auto_id_prefix": "PQT", "has_auto_id": True,
-    },
-    "Dispatch Qty": {
-        "table": DISPATCH_TABLE, "columns": list(DISPATCH_COLUMNS),
-        "auto_id_col": "Dispatch_ID", "auto_id_prefix": "DSP", "has_auto_id": True,
-    },
-    "Return Qty": {
-        "table": RETURN_TABLE, "columns": list(RETURN_COLUMNS),
-        "auto_id_col": "Return_ID", "auto_id_prefix": "RET", "has_auto_id": True,
-    },
-    "Closing Stock": {
-        "table": CLOSING_TABLE, "columns": list(CLOSING_COLUMNS),
-        "auto_id_col": "Closing_Stock_ID", "auto_id_prefix": "CLS", "has_auto_id": True,
-    },
-    "Stock Adjustment": {
-        "table": ADJUSTMENT_TABLE, "columns": list(ADJUSTMENT_COLUMNS),
-        "auto_id_col": "Adjustment_ID", "auto_id_prefix": "ADJ", "has_auto_id": True,
-    },
-    "Delivery Challan": {
-        "table": CHALLAN_TABLE, "columns": list(CHALLAN_COLUMNS),
-        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False,
-    },
-    "Delivery Challan Items": {
-        "table": CHALLAN_ITEMS_TABLE, "columns": list(CHALLAN_ITEMS_COLUMNS),
-        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False,
-    },
-    "Return Challan": {
-        "table": RETURN_CHALLAN_TABLE, "columns": list(RETURN_CHALLAN_COLUMNS),
-        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False,
-    },
-    "Return Challan Items": {
-        "table": RETURN_CHALLAN_ITEMS_TABLE,
+    "Item Registration": {"table": ITEM_TABLE, "columns": list(ITEM_COLUMNS),
+        "auto_id_col": "Item_ID", "auto_id_prefix": "ITM", "has_auto_id": True},
+    "Production": {"table": PRODUCTION_TABLE, "columns": list(PRODUCTION_COLUMNS),
+        "auto_id_col": "Production_ID", "auto_id_prefix": "PRD", "has_auto_id": True},
+    "Opening Stock": {"table": OPENING_TABLE, "columns": list(OPENING_COLUMNS),
+        "auto_id_col": "Opening_Stock_ID", "auto_id_prefix": "OPN", "has_auto_id": True},
+    "Production Qty": {"table": PRODUCTION_QTY_TABLE,
+        "columns": list(PRODUCTION_QTY_COLUMNS),
+        "auto_id_col": "Production_ID", "auto_id_prefix": "PQT", "has_auto_id": True},
+    "Dispatch Qty": {"table": DISPATCH_TABLE, "columns": list(DISPATCH_COLUMNS),
+        "auto_id_col": "Dispatch_ID", "auto_id_prefix": "DSP", "has_auto_id": True},
+    "Return Qty": {"table": RETURN_TABLE, "columns": list(RETURN_COLUMNS),
+        "auto_id_col": "Return_ID", "auto_id_prefix": "RET", "has_auto_id": True},
+    "Closing Stock": {"table": CLOSING_TABLE, "columns": list(CLOSING_COLUMNS),
+        "auto_id_col": "Closing_Stock_ID", "auto_id_prefix": "CLS", "has_auto_id": True},
+    "Stock Adjustment": {"table": ADJUSTMENT_TABLE,
+        "columns": list(ADJUSTMENT_COLUMNS),
+        "auto_id_col": "Adjustment_ID", "auto_id_prefix": "ADJ", "has_auto_id": True},
+    "Delivery Challan": {"table": CHALLAN_TABLE, "columns": list(CHALLAN_COLUMNS),
+        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False},
+    "Delivery Challan Items": {"table": CHALLAN_ITEMS_TABLE,
+        "columns": list(CHALLAN_ITEMS_COLUMNS),
+        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False},
+    "Return Challan": {"table": RETURN_CHALLAN_TABLE,
+        "columns": list(RETURN_CHALLAN_COLUMNS),
+        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False},
+    "Return Challan Items": {"table": RETURN_CHALLAN_ITEMS_TABLE,
         "columns": list(RETURN_CHALLAN_ITEMS_COLUMNS),
-        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False,
-    },
-    "Invoice": {
-        "table": INVOICE_TABLE, "columns": list(INVOICE_COLUMNS),
-        "auto_id_col": "invoice_id", "auto_id_prefix": "", "has_auto_id": False,
-    },
-    "Invoice Items": {
-        "table": INVOICE_ITEMS_TABLE, "columns": list(INVOICE_ITEMS_COLUMNS),
-        "auto_id_col": "invoice_item_id", "auto_id_prefix": "", "has_auto_id": False,
-    },
+        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False},
+    "Invoice": {"table": INVOICE_TABLE, "columns": list(INVOICE_COLUMNS),
+        "auto_id_col": "invoice_id", "auto_id_prefix": "", "has_auto_id": False},
+    "Invoice Items": {"table": INVOICE_ITEMS_TABLE,
+        "columns": list(INVOICE_ITEMS_COLUMNS),
+        "auto_id_col": "invoice_item_id", "auto_id_prefix": "", "has_auto_id": False},
 }
 
 NUMERIC_TARGETS = {
@@ -1559,7 +1524,6 @@ def bulk_import_page():
                  type="primary", key=f"bulk_insert_{target_name}"):
         progress = st.progress(0)
         status = st.empty()
-
         total = len(payloads)
         inserted = 0
         failed = 0
@@ -1586,19 +1550,15 @@ def bulk_import_page():
                 progress.progress(min((i + len(batch)) / total, 1.0))
 
         progress.progress(1.0)
-
         st.markdown("---")
         if failed == 0:
-            st.success(f"✅ Successfully inserted **{inserted}** records "
-                       f"into `{target_table}`.")
+            st.success(f"✅ Successfully inserted **{inserted}** records.")
         else:
             st.warning(f"⚠️ Inserted: **{inserted}** | Failed: **{failed}**")
-
         if errors_list:
             with st.expander(f"Show {len(errors_list)} error(s)"):
                 for e in errors_list[:50]:
                     st.code(e)
-
         refresh_all()
 
 
@@ -1658,7 +1618,6 @@ st.markdown(
 )
 
 
-
 # =========================================================
 # PAGE ROUTING
 # =========================================================
@@ -1666,7 +1625,6 @@ st.markdown(
 if page == "Executive Dashboard":
     st.title("Executive Dashboard")
     t = TOTALS
-
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(f"""
@@ -1674,32 +1632,28 @@ if page == "Executive Dashboard":
                 <div class="metric-label">Registered Items</div>
                 <div class="metric-value">{len(items):,}</div>
                 <div class="metric-caption">Total product items</div>
-            </div>
-        """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
     with c2:
         st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-label">Good Production</div>
                 <div class="metric-value">{t['good']:,.0f} m</div>
                 <div class="metric-caption">Accepted production</div>
-            </div>
-        """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
     with c3:
         st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-label">Closing Stock</div>
                 <div class="metric-value">{t['closing']:,.0f}</div>
                 <div class="metric-caption">Available inventory</div>
-            </div>
-        """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
     with c4:
         st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-label">Production Yield</div>
                 <div class="metric-value">{t['yield_pct']:.1f}%</div>
                 <div class="metric-caption">Good output ratio</div>
-            </div>
-        """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
     st.markdown("---")
     st.subheader("Stock Ledger")
@@ -1715,7 +1669,6 @@ elif page == "Bulk Import":
 
 elif page == "Item Registration":
     st.title("Item Registration")
-
     if items_err:
         st.error(f"Failed to load Item table: {items_err}")
 
@@ -1731,7 +1684,6 @@ elif page == "Item Registration":
     with tab2:
         next_item_id = next_id_for(ITEM_TABLE, items)
         st.info(f"Next Item ID: {next_item_id}")
-
         with st.form("add_item_form"):
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -1751,13 +1703,11 @@ elif page == "Item Registration":
         if submit:
             try:
                 supabase.table(ITEM_TABLE).insert({
-                    "Item_ID": next_item_id,
-                    "Item_Code": item_code.strip(),
+                    "Item_ID": next_item_id, "Item_Code": item_code.strip(),
                     "Material_Grade": material_grade.strip(),
                     "Application": application.strip(),
                     "Nominal_Diameter_mm": diameter.strip(),
-                    "Wall_Thickness_mm": wall.strip(),
-                    "SDR": sdr.strip(),
+                    "Wall_Thickness_mm": wall.strip(), "SDR": sdr.strip(),
                     "Color": color.strip(),
                     "Standard_Length": standard_length.strip(),
                     "Unit": unit.strip()
@@ -1773,7 +1723,7 @@ elif page == "Item Registration":
             st.info("No items available.")
         else:
             selected_id = st.selectbox("Select Item ID",
-                                       items["Item_ID"].astype(str).tolist())
+                items["Item_ID"].astype(str).tolist())
             selected = items.loc[items["Item_ID"].astype(str) == selected_id].iloc[0]
 
             def _v(col):
@@ -1799,12 +1749,10 @@ elif page == "Item Registration":
             if update:
                 try:
                     supabase.table(ITEM_TABLE).update({
-                        "Item_Code": new_code.strip(),
-                        "Material_Grade": new_grade.strip(),
+                        "Item_Code": new_code.strip(), "Material_Grade": new_grade.strip(),
                         "Application": new_application.strip(),
                         "Nominal_Diameter_mm": new_diameter.strip(),
-                        "Wall_Thickness_mm": new_wall.strip(),
-                        "SDR": new_sdr.strip(),
+                        "Wall_Thickness_mm": new_wall.strip(), "SDR": new_sdr.strip(),
                         "Color": new_color.strip(),
                         "Standard_Length": new_length.strip(),
                         "Unit": new_unit.strip()
@@ -1828,7 +1776,6 @@ elif page == "Item Registration":
 
 elif page == "Production":
     st.title("Production")
-
     if production_err:
         st.error(f"Failed to load Production: {production_err}")
 
@@ -1847,7 +1794,6 @@ elif page == "Production":
     with tab2:
         next_production_id = next_id_for(PRODUCTION_TABLE, production)
         st.info(f"Next Production ID: {next_production_id}")
-
         if items.empty:
             st.warning("Add an item in Item Registration first.")
         else:
@@ -1856,19 +1802,14 @@ elif page == "Production":
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     selected_item = st.selectbox("Item ID", options)
-                    production_date = st.date_input("Production Date",
-                                                    value=date.today())
+                    production_date = st.date_input("Production Date", value=date.today())
                     batch_no = st.text_input("Batch No")
                 with c2:
-                    production_line = st.selectbox("Production Line",
-                                                   PRODUCTION_LINES)
-                    planned_qty = st.number_input("Planned Quantity (m)",
-                                                  min_value=1, value=1, step=1)
-                    good_qty = st.number_input("Good Quantity (m)",
-                                               min_value=0, value=0, step=1)
+                    production_line = st.selectbox("Production Line", PRODUCTION_LINES)
+                    planned_qty = st.number_input("Planned Quantity (m)", min_value=1, value=1, step=1)
+                    good_qty = st.number_input("Good Quantity (m)", min_value=0, value=0, step=1)
                 with c3:
-                    rejected_qty = st.number_input("Rejected Quantity (m)",
-                                                   min_value=0, value=0, step=1)
+                    rejected_qty = st.number_input("Rejected Quantity (m)", min_value=0, value=0, step=1)
                     status = st.selectbox("Production Status", PRODUCTION_STATUSES)
                 submit = st.form_submit_button("Add Production", type="primary")
 
@@ -1880,10 +1821,8 @@ elif page == "Production":
                         "Production_Date": date_str(production_date),
                         "Batch_No": batch_no.strip(),
                         "Production_Line": production_line,
-                        "Planned_Qty_m": planned_qty,
-                        "Good_Qty_m": good_qty,
-                        "Rejected_Qty_m": rejected_qty,
-                        "Production_Status": status
+                        "Planned_Qty_m": planned_qty, "Good_Qty_m": good_qty,
+                        "Rejected_Qty_m": rejected_qty, "Production_Status": status
                     }).execute()
                     st.success(f"Production {next_production_id} added.")
                     refresh_all()
@@ -1898,8 +1837,7 @@ elif page == "Production":
             selected_id = st.selectbox("Select Production ID",
                 production["Production_ID"].astype(str).tolist())
             selected = production.loc[
-                production["Production_ID"].astype(str) == selected_id
-            ].iloc[0]
+                production["Production_ID"].astype(str) == selected_id].iloc[0]
 
             current_line = str(selected["Production_Line"]) if pd.notna(selected["Production_Line"]) else PRODUCTION_LINES[0]
             line_idx = PRODUCTION_LINES.index(current_line) if current_line in PRODUCTION_LINES else 0
@@ -1909,8 +1847,7 @@ elif page == "Production":
                 with c1:
                     edit_batch = st.text_input("Batch No",
                         value=str(selected["Batch_No"]) if pd.notna(selected["Batch_No"]) else "")
-                    edit_line = st.selectbox("Production Line", PRODUCTION_LINES,
-                                             index=line_idx)
+                    edit_line = st.selectbox("Production Line", PRODUCTION_LINES, index=line_idx)
                 with c2:
                     edit_planned = st.number_input("Planned Quantity", min_value=1,
                         value=max(1, int(selected["Planned_Qty_m"])), step=1)
@@ -1928,10 +1865,8 @@ elif page == "Production":
             if update:
                 try:
                     supabase.table(PRODUCTION_TABLE).update({
-                        "Batch_No": edit_batch,
-                        "Production_Line": edit_line,
-                        "Planned_Qty_m": edit_planned,
-                        "Good_Qty_m": edit_good,
+                        "Batch_No": edit_batch, "Production_Line": edit_line,
+                        "Planned_Qty_m": edit_planned, "Good_Qty_m": edit_good,
                         "Rejected_Qty_m": edit_rejected,
                         "Production_Status": edit_status
                     }).eq("Production_ID", selected_id).execute()
@@ -1954,28 +1889,20 @@ elif page == "Production":
 
 elif page == "Stock Control":
     st.title("Stock Control")
-
-    stock_tabs = st.tabs([
-        "Opening Stock", "Production Qty", "Dispatch Qty",
-        "Return Qty", "Closing Stock"
-    ])
-
+    stock_tabs = st.tabs(["Opening Stock", "Production Qty", "Dispatch Qty",
+                          "Return Qty", "Closing Stock"])
     with stock_tabs[0]:
         crud_stock_table(OPENING_TABLE, opening, "Opening_Stock_ID",
                          "Opening Stock", items, opening_err)
-
     with stock_tabs[1]:
         crud_stock_table(PRODUCTION_QTY_TABLE, prod_qty, "Production_ID",
                          "Production Qty", items, prod_qty_err)
-
     with stock_tabs[2]:
         crud_stock_table(DISPATCH_TABLE, dispatch, "Dispatch_ID",
                          "Dispatch Qty", items, dispatch_err)
-
     with stock_tabs[3]:
         crud_stock_table(RETURN_TABLE, return_qty, "Return_ID",
                          "Return Qty", items, return_err)
-
     with stock_tabs[4]:
         st.markdown("### Closing Stock")
         if not STOCK_LEDGER.empty:
@@ -1988,7 +1915,6 @@ elif page == "Stock Control":
 
 elif page == "Stock Adjustment":
     st.title("Stock Adjustment")
-
     if adjustment_err:
         st.error(f"Failed to load Stock_Adjustment: {adjustment_err}")
 
@@ -2007,7 +1933,6 @@ elif page == "Stock Adjustment":
     with tab2:
         next_adj_id = next_id_for(ADJUSTMENT_TABLE, adjustment)
         st.info(f"Next Adjustment ID: {next_adj_id}")
-
         if items.empty:
             st.warning("Add an item first.")
         else:
@@ -2027,12 +1952,9 @@ elif page == "Stock Adjustment":
             if submit:
                 try:
                     supabase.table(ADJUSTMENT_TABLE).insert({
-                        "Adjustment_ID": next_adj_id,
-                        "Item_ID": selected_item,
-                        "Adjustment_Date": date_str(adj_date),
-                        "Qty": qty,
-                        "Reason": reason,
-                        "Remarks": remarks.strip()
+                        "Adjustment_ID": next_adj_id, "Item_ID": selected_item,
+                        "Adjustment_Date": date_str(adj_date), "Qty": qty,
+                        "Reason": reason, "Remarks": remarks.strip()
                     }).execute()
                     st.success(f"Adjustment {next_adj_id} added.")
                     refresh_all()
@@ -2047,8 +1969,7 @@ elif page == "Stock Adjustment":
             selected_id = st.selectbox("Select Adjustment ID",
                 adjustment["Adjustment_ID"].astype(str).tolist())
             selected = adjustment.loc[
-                adjustment["Adjustment_ID"].astype(str) == selected_id
-            ].iloc[0]
+                adjustment["Adjustment_ID"].astype(str) == selected_id].iloc[0]
 
             options = get_item_options(items)
             ci = str(selected["Item_ID"]) if pd.notna(selected["Item_ID"]) else ""
@@ -2104,7 +2025,6 @@ elif page == "Stock Adjustment":
 
 elif page == "Physical Check":
     st.title("Physical Check")
-
     if STOCK_LEDGER.empty:
         empty_state("No stock data available yet.")
         st.stop()
@@ -2117,14 +2037,12 @@ elif page == "Physical Check":
     })
 
     st.subheader("Enter Physical Counts")
-
     with st.form("physical_check_form"):
         counts = {}
         for _, row in ledger.iterrows():
             iid = row["Item_ID"]
             icode = row["Item_Code"] if pd.notna(row["Item_Code"]) else ""
             sc = float(row["System_Closing"])
-
             c1, c2, c3 = st.columns([2, 2, 3])
             with c1:
                 st.markdown(f"**{iid}**")
@@ -2133,10 +2051,8 @@ elif page == "Physical Check":
                 st.metric("System Closing", f"{sc:,.0f}")
             with c3:
                 counts[iid] = st.number_input("Physical Count", min_value=0.0,
-                                              value=sc, step=1.0,
-                                              key=f"pc_{iid}")
+                                              value=sc, step=1.0, key=f"pc_{iid}")
             st.markdown("---")
-
         submit = st.form_submit_button("Save Differences as Adjustments",
                                        type="primary")
 
@@ -2144,7 +2060,6 @@ elif page == "Physical Check":
         today = date.today()
         inserted = skipped = 0
         errors = []
-
         try:
             adj_resp = supabase.table(ADJUSTMENT_TABLE).select("*").execute()
             current_adj_df = make_df(adj_resp.data or [], ADJUSTMENT_COLUMNS)
@@ -2156,11 +2071,9 @@ elif page == "Physical Check":
             sc = float(row["System_Closing"])
             ph = float(counts.get(iid, sc))
             diff = ph - sc
-
             if abs(diff) < 0.0001:
                 skipped += 1
                 continue
-
             new_id = next_id_for(ADJUSTMENT_TABLE, current_adj_df)
             payload = {
                 "Adjustment_ID": new_id, "Item_ID": iid,
@@ -2171,8 +2084,7 @@ elif page == "Physical Check":
             try:
                 supabase.table(ADJUSTMENT_TABLE).insert(payload).execute()
                 current_adj_df = pd.concat(
-                    [current_adj_df, pd.DataFrame([payload])], ignore_index=True
-                )
+                    [current_adj_df, pd.DataFrame([payload])], ignore_index=True)
                 inserted += 1
             except Exception as e:
                 errors.append(f"{iid}: {e}")
@@ -2189,15 +2101,12 @@ elif page == "Physical Check":
 
 elif page == "Delivery Challan":
     st.title("Delivery Challan")
-
     if challans_err:
         st.error(f"Failed to load Delivery_Challan: {challans_err}")
     if challan_items_err:
         st.error(f"Failed to load Delivery_Challan_Items: {challan_items_err}")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "View / Print", "Create", "Update / Delete", "Manage Items"
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["View / Print", "Create", "Update / Delete", "Manage Items"])
 
     with tab1:
         if challans.empty:
@@ -2206,28 +2115,22 @@ elif page == "Delivery Challan":
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
                 search_dc = st.text_input("Search",
-                    placeholder="Challan No, Customer, Location...",
-                    key="search_dc")
+                    placeholder="Challan No, Customer, Location...", key="search_dc")
             with c2:
                 sort_by_dc = st.selectbox("Sort by",
-                    ["Challan Date", "Challan ID", "Challan No"],
-                    key="sortby_dc")
+                    ["Challan Date", "Challan ID", "Challan No"], key="sortby_dc")
             with c3:
                 sort_ord_dc = st.selectbox("Order",
-                    ["Newest first", "Oldest first"],
-                    key="sortorder_dc")
+                    ["Newest first", "Oldest first"], key="sortorder_dc")
 
             display_dc = challans.copy()
             if search_dc:
                 display_dc = filter_df(display_dc, search_dc)
 
             sort_col = None
-            if sort_by_dc == "Challan Date":
-                sort_col = "challan_date"
-            elif sort_by_dc == "Challan ID":
-                sort_col = "challan_id"
-            elif sort_by_dc == "Challan No":
-                sort_col = "challan_no"
+            if sort_by_dc == "Challan Date": sort_col = "challan_date"
+            elif sort_by_dc == "Challan ID": sort_col = "challan_id"
+            elif sort_by_dc == "Challan No": sort_col = "challan_no"
 
             if sort_col and sort_col in display_dc.columns:
                 try:
@@ -2235,8 +2138,7 @@ elif page == "Delivery Challan":
                         display_dc[sort_col] = pd.to_datetime(
                             display_dc[sort_col], errors="coerce")
                     display_dc = display_dc.sort_values(
-                        by=sort_col,
-                        ascending=(sort_ord_dc == "Oldest first"),
+                        by=sort_col, ascending=(sort_ord_dc == "Oldest first"),
                         na_position="last")
                 except Exception:
                     pass
@@ -2245,10 +2147,8 @@ elif page == "Delivery Challan":
                 st.warning("No challans match the search.")
             else:
                 left_col, right_col = st.columns([1, 1.6])
-
                 with left_col:
                     st.markdown(f"#### {len(display_dc)} Challan(s)")
-
                     options_display = []
                     id_map = {}
                     for _, row in display_dc.iterrows():
@@ -2259,18 +2159,13 @@ elif page == "Delivery Challan":
                         options_display.append(label)
                         id_map[label] = cid
 
-                    picked_label = st.radio("Challans",
-                        options_display, key="pick_dc",
-                        label_visibility="collapsed")
+                    picked_label = st.radio("Challans", options_display,
+                        key="pick_dc", label_visibility="collapsed")
                     picked_id = id_map.get(picked_label)
-
                     picked_row = display_dc.loc[
-                        display_dc["challan_id"] == picked_id
-                    ].iloc[0]
-
+                        display_dc["challan_id"] == picked_id].iloc[0]
                     items_for = challan_items[
-                        challan_items["challan_id"] == picked_id
-                    ].sort_values("sr_no")
+                        challan_items["challan_id"] == picked_id].sort_values("sr_no")
 
                     st.markdown("---")
                     st.markdown(
@@ -2282,34 +2177,29 @@ elif page == "Delivery Challan":
                         f"**Location:** {picked_row.get('location', '')}  \n"
                         f"**Sales Head:** {picked_row.get('sales_head', '')}  \n"
                         f"**Payment Terms:** {picked_row.get('payment_terms', '')}  \n"
-                        f"**Items:** {len(items_for)}"
-                    )
+                        f"**Items:** {len(items_for)}")
 
                 with right_col:
                     st.markdown("#### Print / Download")
-                    html = build_challan_html(picked_row, items_for,
-                                              "DELIVERY CHALLAN")
+                    html = build_challan_html(picked_row, items_for, "DELIVERY CHALLAN")
                     c1, c2 = st.columns(2)
                     with c1:
                         printable = build_printable_html_page(html)
                         st.download_button("PDF (Print)",
                             data=printable.encode("utf-8"),
                             file_name=f"{picked_row.get('challan_no', 'dc')}_print.html",
-                            mime="text/html",
-                            use_container_width=True, key="pdf_dc")
+                            mime="text/html", use_container_width=True, key="pdf_dc")
                     with c2:
                         st.download_button("HTML",
                             data=html.encode("utf-8"),
                             file_name=f"{picked_row.get('challan_no', 'dc')}.html",
-                            mime="text/html",
-                            use_container_width=True, key="html_dc")
+                            mime="text/html", use_container_width=True, key="html_dc")
 
                     if not items_for.empty:
                         st.download_button("CSV (Items)",
                             data=items_for.to_csv(index=False).encode("utf-8"),
                             file_name=f"{picked_row.get('challan_no', 'dc')}_items.csv",
-                            mime="text/csv",
-                            use_container_width=True, key="csv_dc")
+                            mime="text/csv", use_container_width=True, key="csv_dc")
                         st.markdown("#### Items")
                         st.dataframe(items_for[
                             ["sr_no", "item_id", "description", "quantity", "unit"]
@@ -2318,7 +2208,6 @@ elif page == "Delivery Challan":
     with tab2:
         next_no_dc = next_challan_no(challans, "DC")
         st.info(f"Next Challan No: {next_no_dc}")
-
         st.markdown("#### Customer Details")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -2390,8 +2279,7 @@ elif page == "Delivery Challan":
             sel_no_dc = st.selectbox("Select Challan",
                 challans["challan_no"].astype(str).tolist(), key="upd_dc")
             sel_row_dc = challans.loc[
-                challans["challan_no"].astype(str) == sel_no_dc
-            ].iloc[0]
+                challans["challan_no"].astype(str) == sel_no_dc].iloc[0]
             cid_dc2 = sel_row_dc["challan_id"]
 
             def _v_dc(col):
@@ -2458,13 +2346,11 @@ elif page == "Delivery Challan":
             sel_no_dc2 = st.selectbox("Select Challan",
                 challans["challan_no"].astype(str).tolist(), key="items_dc")
             sel_row_dc2 = challans.loc[
-                challans["challan_no"].astype(str) == sel_no_dc2
-            ].iloc[0]
+                challans["challan_no"].astype(str) == sel_no_dc2].iloc[0]
             cid_dc3 = sel_row_dc2["challan_id"]
 
             cur_dc = challan_items[
-                challan_items["challan_id"] == cid_dc3
-            ].sort_values("sr_no")
+                challan_items["challan_id"] == cid_dc3].sort_values("sr_no")
 
             st.markdown(f"#### Items for {sel_no_dc2}")
             if cur_dc.empty:
@@ -2519,16 +2405,14 @@ elif page == "Delivery Challan":
                     cur_dc["challan_item_id"].astype(str).tolist(),
                     key="edit_ci_sel_dc")
                 er_dc = cur_dc.loc[
-                    cur_dc["challan_item_id"].astype(str) == eid_dc
-                ].iloc[0]
+                    cur_dc["challan_item_id"].astype(str) == eid_dc].iloc[0]
 
                 with st.form("edit_item_dc_form"):
                     c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
                     with c1:
                         ce_dc = str(er_dc["item_id"]) if pd.notna(er_dc["item_id"]) else "(none)"
                         if item_options_dc:
-                            idx = item_options_dc.index(ce_dc) + 1 if ce_dc in item_options_dc else 0
-                            ei_dc = st.selectbox("Item ID",
+                            idx = item_options_dc.index(ce_dc) + 1 if ce_dc in item_options_dc else 0                            ei_dc = st.selectbox("Item ID",
                                 ["(none)"] + item_options_dc, index=idx,
                                 key="edit_ci_dc")
                         else:
@@ -2574,15 +2458,12 @@ elif page == "Delivery Challan":
 
 elif page == "Return Challan":
     st.title("Return Challan")
-
     if return_challans_err:
         st.error(f"Failed to load Return_Challan: {return_challans_err}")
     if return_challan_items_err:
         st.error(f"Failed to load Return_Challan_Items: {return_challan_items_err}")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "View / Print", "Create", "Update / Delete", "Manage Items"
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["View / Print", "Create", "Update / Delete", "Manage Items"])
 
     with tab1:
         if return_challans.empty:
@@ -2591,28 +2472,22 @@ elif page == "Return Challan":
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
                 search_rc = st.text_input("Search",
-                    placeholder="Challan No, Customer, Location...",
-                    key="search_rc")
+                    placeholder="Challan No, Customer, Location...", key="search_rc")
             with c2:
                 sort_by_rc = st.selectbox("Sort by",
-                    ["Challan Date", "Challan ID", "Challan No"],
-                    key="sortby_rc")
+                    ["Challan Date", "Challan ID", "Challan No"], key="sortby_rc")
             with c3:
                 sort_ord_rc = st.selectbox("Order",
-                    ["Newest first", "Oldest first"],
-                    key="sortorder_rc")
+                    ["Newest first", "Oldest first"], key="sortorder_rc")
 
             display_rc = return_challans.copy()
             if search_rc:
                 display_rc = filter_df(display_rc, search_rc)
 
             sort_col_rc = None
-            if sort_by_rc == "Challan Date":
-                sort_col_rc = "challan_date"
-            elif sort_by_rc == "Challan ID":
-                sort_col_rc = "challan_id"
-            elif sort_by_rc == "Challan No":
-                sort_col_rc = "challan_no"
+            if sort_by_rc == "Challan Date": sort_col_rc = "challan_date"
+            elif sort_by_rc == "Challan ID": sort_col_rc = "challan_id"
+            elif sort_by_rc == "Challan No": sort_col_rc = "challan_no"
 
             if sort_col_rc and sort_col_rc in display_rc.columns:
                 try:
@@ -2620,8 +2495,7 @@ elif page == "Return Challan":
                         display_rc[sort_col_rc] = pd.to_datetime(
                             display_rc[sort_col_rc], errors="coerce")
                     display_rc = display_rc.sort_values(
-                        by=sort_col_rc,
-                        ascending=(sort_ord_rc == "Oldest first"),
+                        by=sort_col_rc, ascending=(sort_ord_rc == "Oldest first"),
                         na_position="last")
                 except Exception:
                     pass
@@ -2630,10 +2504,8 @@ elif page == "Return Challan":
                 st.warning("No challans match the search.")
             else:
                 left_col_rc, right_col_rc = st.columns([1, 1.6])
-
                 with left_col_rc:
                     st.markdown(f"#### {len(display_rc)} Challan(s)")
-
                     options_display_rc = []
                     id_map_rc = {}
                     for _, row in display_rc.iterrows():
@@ -2644,15 +2516,11 @@ elif page == "Return Challan":
                         options_display_rc.append(label)
                         id_map_rc[label] = cid
 
-                    picked_label_rc = st.radio("Challans",
-                        options_display_rc, key="pick_rc",
-                        label_visibility="collapsed")
+                    picked_label_rc = st.radio("Challans", options_display_rc,
+                        key="pick_rc", label_visibility="collapsed")
                     picked_id_rc = id_map_rc.get(picked_label_rc)
-
                     picked_row_rc = display_rc.loc[
-                        display_rc["challan_id"] == picked_id_rc
-                    ].iloc[0]
-
+                        display_rc["challan_id"] == picked_id_rc].iloc[0]
                     items_for_rc = return_challan_items[
                         return_challan_items["challan_id"] == picked_id_rc
                     ].sort_values("sr_no")
@@ -2667,34 +2535,29 @@ elif page == "Return Challan":
                         f"**Location:** {picked_row_rc.get('location', '')}  \n"
                         f"**Sales Head:** {picked_row_rc.get('sales_head', '')}  \n"
                         f"**Payment Terms:** {picked_row_rc.get('payment_terms', '')}  \n"
-                        f"**Items:** {len(items_for_rc)}"
-                    )
+                        f"**Items:** {len(items_for_rc)}")
 
                 with right_col_rc:
                     st.markdown("#### Print / Download")
-                    html_rc = build_challan_html(picked_row_rc, items_for_rc,
-                                                 "RETURN CHALLAN")
+                    html_rc = build_challan_html(picked_row_rc, items_for_rc, "RETURN CHALLAN")
                     c1, c2 = st.columns(2)
                     with c1:
                         printable_rc = build_printable_html_page(html_rc)
                         st.download_button("PDF (Print)",
                             data=printable_rc.encode("utf-8"),
                             file_name=f"{picked_row_rc.get('challan_no', 'rc')}_print.html",
-                            mime="text/html",
-                            use_container_width=True, key="pdf_rc")
+                            mime="text/html", use_container_width=True, key="pdf_rc")
                     with c2:
                         st.download_button("HTML",
                             data=html_rc.encode("utf-8"),
                             file_name=f"{picked_row_rc.get('challan_no', 'rc')}.html",
-                            mime="text/html",
-                            use_container_width=True, key="html_rc")
+                            mime="text/html", use_container_width=True, key="html_rc")
 
                     if not items_for_rc.empty:
                         st.download_button("CSV (Items)",
                             data=items_for_rc.to_csv(index=False).encode("utf-8"),
                             file_name=f"{picked_row_rc.get('challan_no', 'rc')}_items.csv",
-                            mime="text/csv",
-                            use_container_width=True, key="csv_rc")
+                            mime="text/csv", use_container_width=True, key="csv_rc")
                         st.markdown("#### Items")
                         st.dataframe(items_for_rc[
                             ["sr_no", "item_id", "description", "quantity", "unit"]
@@ -2703,7 +2566,6 @@ elif page == "Return Challan":
     with tab2:
         next_no_rc = next_challan_no(return_challans, "RC")
         st.info(f"Next Challan No: {next_no_rc}")
-
         st.markdown("#### Customer Details")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -2775,8 +2637,7 @@ elif page == "Return Challan":
             sel_no_rc = st.selectbox("Select Challan",
                 return_challans["challan_no"].astype(str).tolist(), key="upd_rc")
             sel_row_rc = return_challans.loc[
-                return_challans["challan_no"].astype(str) == sel_no_rc
-            ].iloc[0]
+                return_challans["challan_no"].astype(str) == sel_no_rc].iloc[0]
             cid_rc2 = sel_row_rc["challan_id"]
 
             def _v_rc(col):
@@ -2843,13 +2704,11 @@ elif page == "Return Challan":
             sel_no_rc2 = st.selectbox("Select Challan",
                 return_challans["challan_no"].astype(str).tolist(), key="items_rc")
             sel_row_rc2 = return_challans.loc[
-                return_challans["challan_no"].astype(str) == sel_no_rc2
-            ].iloc[0]
+                return_challans["challan_no"].astype(str) == sel_no_rc2].iloc[0]
             cid_rc3 = sel_row_rc2["challan_id"]
 
             cur_rc = return_challan_items[
-                return_challan_items["challan_id"] == cid_rc3
-            ].sort_values("sr_no")
+                return_challan_items["challan_id"] == cid_rc3].sort_values("sr_no")
 
             st.markdown(f"#### Items for {sel_no_rc2}")
             if cur_rc.empty:
@@ -2904,8 +2763,7 @@ elif page == "Return Challan":
                     cur_rc["challan_item_id"].astype(str).tolist(),
                     key="edit_ci_sel_rc")
                 er_rc = cur_rc.loc[
-                    cur_rc["challan_item_id"].astype(str) == eid_rc
-                ].iloc[0]
+                    cur_rc["challan_item_id"].astype(str) == eid_rc].iloc[0]
 
                 with st.form("edit_item_rc_form"):
                     c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
@@ -2959,15 +2817,12 @@ elif page == "Return Challan":
 
 elif page == "Invoice":
     st.title("Invoice")
-
     if invoices_err:
         st.error(f"Failed to load Invoice: {invoices_err}")
     if invoice_items_err:
         st.error(f"Failed to load Invoice_Items: {invoice_items_err}")
 
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "View / Print", "Create", "Update / Delete", "Manage Items"
-    ])
+    tab1, tab2, tab3, tab4 = st.tabs(["View / Print", "Create", "Update / Delete", "Manage Items"])
 
     with tab1:
         if invoices.empty:
@@ -2976,28 +2831,22 @@ elif page == "Invoice":
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
                 search_inv = st.text_input("Search",
-                    placeholder="Invoice No, Customer, DC No...",
-                    key="search_inv")
+                    placeholder="Invoice No, Customer, DC No...", key="search_inv")
             with c2:
                 sort_by_inv = st.selectbox("Sort by",
-                    ["Invoice Date", "Invoice ID", "Invoice No"],
-                    key="sortby_inv")
+                    ["Invoice Date", "Invoice ID", "Invoice No"], key="sortby_inv")
             with c3:
                 sort_ord_inv = st.selectbox("Order",
-                    ["Newest first", "Oldest first"],
-                    key="sortorder_inv")
+                    ["Newest first", "Oldest first"], key="sortorder_inv")
 
             display_inv = invoices.copy()
             if search_inv:
                 display_inv = filter_df(display_inv, search_inv)
 
             sort_col_inv = None
-            if sort_by_inv == "Invoice Date":
-                sort_col_inv = "invoice_date"
-            elif sort_by_inv == "Invoice ID":
-                sort_col_inv = "invoice_id"
-            elif sort_by_inv == "Invoice No":
-                sort_col_inv = "invoice_no"
+            if sort_by_inv == "Invoice Date": sort_col_inv = "invoice_date"
+            elif sort_by_inv == "Invoice ID": sort_col_inv = "invoice_id"
+            elif sort_by_inv == "Invoice No": sort_col_inv = "invoice_no"
 
             if sort_col_inv and sort_col_inv in display_inv.columns:
                 try:
@@ -3005,8 +2854,7 @@ elif page == "Invoice":
                         display_inv[sort_col_inv] = pd.to_datetime(
                             display_inv[sort_col_inv], errors="coerce")
                     display_inv = display_inv.sort_values(
-                        by=sort_col_inv,
-                        ascending=(sort_ord_inv == "Oldest first"),
+                        by=sort_col_inv, ascending=(sort_ord_inv == "Oldest first"),
                         na_position="last")
                 except Exception:
                     pass
@@ -3015,10 +2863,8 @@ elif page == "Invoice":
                 st.warning("No invoices match the search.")
             else:
                 left_col, right_col = st.columns([1, 1.6])
-
                 with left_col:
                     st.markdown(f"#### {len(display_inv)} Invoice(s)")
-
                     options_display = []
                     id_map = {}
                     for _, row in display_inv.iterrows():
@@ -3029,18 +2875,13 @@ elif page == "Invoice":
                         options_display.append(label)
                         id_map[label] = cid
 
-                    picked_label = st.radio("Invoices",
-                        options_display, key="pick_inv",
-                        label_visibility="collapsed")
+                    picked_label = st.radio("Invoices", options_display,
+                        key="pick_inv", label_visibility="collapsed")
                     picked_id = id_map.get(picked_label)
-
                     picked_row = display_inv.loc[
-                        display_inv["invoice_id"] == picked_id
-                    ].iloc[0]
-
+                        display_inv["invoice_id"] == picked_id].iloc[0]
                     items_for = invoice_items[
-                        invoice_items["invoice_id"] == picked_id
-                    ].sort_values("sr_no")
+                        invoice_items["invoice_id"] == picked_id].sort_values("sr_no")
 
                     dc_no = ""
                     try:
@@ -3060,8 +2901,7 @@ elif page == "Invoice":
                         f"**DC No:** {dc_no}  \n"
                         f"**Sales Head:** {picked_row.get('sales_head', '')}  \n"
                         f"**Items:** {len(items_for)}  \n"
-                        f"**Current Bill:** Rs. {float(picked_row.get('current_bill_amt', 0) or 0):,.2f}"
-                    )
+                        f"**Current Bill:** Rs. {float(picked_row.get('current_bill_amt', 0) or 0):,.2f}")
 
                 with right_col:
                     st.markdown("#### Print / Download")
@@ -3072,21 +2912,18 @@ elif page == "Invoice":
                         st.download_button("PDF (Print)",
                             data=printable.encode("utf-8"),
                             file_name=f"{picked_row.get('invoice_no', 'inv')}_print.html",
-                            mime="text/html",
-                            use_container_width=True, key="pdf_inv")
+                            mime="text/html", use_container_width=True, key="pdf_inv")
                     with c2:
                         st.download_button("HTML",
                             data=html.encode("utf-8"),
                             file_name=f"{picked_row.get('invoice_no', 'inv')}.html",
-                            mime="text/html",
-                            use_container_width=True, key="html_inv")
+                            mime="text/html", use_container_width=True, key="html_inv")
 
                     if not items_for.empty:
                         st.download_button("CSV (Items)",
                             data=items_for.to_csv(index=False).encode("utf-8"),
                             file_name=f"{picked_row.get('invoice_no', 'inv')}_items.csv",
-                            mime="text/csv",
-                            use_container_width=True, key="csv_inv")
+                            mime="text/csv", use_container_width=True, key="csv_inv")
                         st.markdown("#### Items")
                         st.dataframe(items_for[
                             ["sr_no", "item_id", "description", "quantity",
@@ -3105,7 +2942,6 @@ elif page == "Invoice":
             inv_contact = st.text_input("Contact Detail", key="inv_cd")
         with c2:
             inv_sales_head = st.text_input("Sales Head", key="inv_sh")
-            # DC dropdown
             dc_opts = get_dc_options(challans)
             dc_labels = ["(none)"] + [o[0] for o in dc_opts]
             dc_sel = st.selectbox("DC ID (from Delivery Challan)",
@@ -3121,21 +2957,30 @@ elif page == "Invoice":
             inv_pay_mode = st.selectbox("Payment Mode", PAYMENT_MODES,
                                          key="inv_pay")
             inv_cartage = st.number_input("Cartage", min_value=0.0, value=0.0,
-                                           step=0.01, format="%.2f",
-                                           key="inv_cart")
+                                           step=0.01, format="%.2f", key="inv_cart")
             inv_amt_recv = st.number_input("Amount Received", min_value=0.0,
                                             value=0.0, step=0.01,
                                             format="%.2f", key="inv_amt_recv")
             inv_outstanding = st.number_input("Outstanding", min_value=0.0,
                                                value=0.0, step=0.01,
                                                format="%.2f", key="inv_out")
+
+        # Signature fields — manual
+        st.markdown("#### Signature Fields (Manual Entry)")
+        csig1, csig2, csig3 = st.columns(3)
+        with csig1:
+            inv_prepared_by = st.text_input("Prepared By", key="inv_prep")
+        with csig2:
+            inv_received_by = st.text_input("Received By", key="inv_recv")
+        with csig3:
+            inv_auth_sig = st.text_input("Authorized Signatory", key="inv_auth")
+
         inv_remarks = st.text_area("Remarks", height=70, key="inv_remarks")
 
         st.markdown("---")
         st.markdown("#### Items")
         item_rows_inv = invoice_items_editor("create_inv")
 
-        # Auto-calc current bill
         items_total = sum(
             float(r.get("quantity", 0)) * float(r.get("price_per_unit", 0))
             for r in item_rows_inv
@@ -3170,6 +3015,9 @@ elif page == "Invoice":
                             "current_bill_amt": float(auto_bill),
                             "outstanding": float(inv_outstanding),
                             "remarks": inv_remarks.strip() or None,
+                            "prepared_by": inv_prepared_by.strip() or None,
+                            "received_by": inv_received_by.strip() or None,
+                            "authorized_signatory": inv_auth_sig.strip() or None,
                         }
                         resp_inv = supabase.table(INVOICE_TABLE).insert(hdr_inv).execute()
                         if resp_inv.data:
@@ -3201,8 +3049,7 @@ elif page == "Invoice":
             sel_no_inv = st.selectbox("Select Invoice",
                 invoices["invoice_no"].astype(str).tolist(), key="upd_inv")
             sel_row_inv = invoices.loc[
-                invoices["invoice_no"].astype(str) == sel_no_inv
-            ].iloc[0]
+                invoices["invoice_no"].astype(str) == sel_no_inv].iloc[0]
             inv_id_edit = sel_row_inv["invoice_id"]
 
             def _v_inv(col):
@@ -3240,6 +3087,16 @@ elif page == "Invoice":
                     eout_inv = st.number_input("Outstanding", min_value=0.0,
                         value=float(sel_row_inv.get("outstanding", 0) or 0),
                         step=0.01, format="%.2f", key="eout_inv")
+
+                st.markdown("#### Signature Fields")
+                cs1, cs2, cs3 = st.columns(3)
+                with cs1:
+                    eprep = st.text_input("Prepared By", value=_v_inv("prepared_by"), key="eprep_inv")
+                with cs2:
+                    erecv = st.text_input("Received By", value=_v_inv("received_by"), key="erecv_inv")
+                with cs3:
+                    eauth = st.text_input("Authorized Signatory", value=_v_inv("authorized_signatory"), key="eauth_inv")
+
                 erem_inv = st.text_area("Remarks", value=_v_inv("remarks"), height=70, key="erem_inv")
                 upd_inv = st.form_submit_button("Update Header", type="primary")
 
@@ -3256,6 +3113,9 @@ elif page == "Invoice":
                         "amount_received": float(eamt_inv),
                         "current_bill_amt": float(ebil_inv),
                         "outstanding": float(eout_inv),
+                        "prepared_by": eprep.strip() or None,
+                        "received_by": erecv.strip() or None,
+                        "authorized_signatory": eauth.strip() or None,
                         "remarks": erem_inv.strip() or None,
                     }).eq("invoice_id", inv_id_edit).execute()
                     st.success("Updated.")
@@ -3281,13 +3141,11 @@ elif page == "Invoice":
             sel_no_inv2 = st.selectbox("Select Invoice",
                 invoices["invoice_no"].astype(str).tolist(), key="items_inv")
             sel_row_inv2 = invoices.loc[
-                invoices["invoice_no"].astype(str) == sel_no_inv2
-            ].iloc[0]
+                invoices["invoice_no"].astype(str) == sel_no_inv2].iloc[0]
             inv_id_edit2 = sel_row_inv2["invoice_id"]
 
             cur_inv = invoice_items[
-                invoice_items["invoice_id"] == inv_id_edit2
-            ].sort_values("sr_no")
+                invoice_items["invoice_id"] == inv_id_edit2].sort_values("sr_no")
 
             st.markdown(f"#### Items for {sel_no_inv2}")
             if cur_inv.empty:
@@ -3351,8 +3209,7 @@ elif page == "Invoice":
                     cur_inv["invoice_item_id"].astype(str).tolist(),
                     key="edit_ci_sel_inv")
                 er_inv = cur_inv.loc[
-                    cur_inv["invoice_item_id"].astype(str) == eid_inv
-                ].iloc[0]
+                    cur_inv["invoice_item_id"].astype(str) == eid_inv].iloc[0]
 
                 with st.form("edit_item_inv_form"):
                     c1, c2, c3, c4, c5, c6 = st.columns([2, 4, 1.5, 1.5, 1.5, 1.5])
@@ -3416,7 +3273,6 @@ elif page == "Invoice":
 
 elif page == "Analytics":
     st.title("Analytics")
-
     st.subheader("Production Performance")
     if not production.empty:
         c1, c2, c3 = st.columns(3)
@@ -3427,27 +3283,19 @@ elif page == "Analytics":
 
 elif page == "Custom Charts":
     st.title("Custom Charts")
-
     sources = {
-        "Production": production,
-        "Item Registration": items,
-        "Opening Stock": opening,
-        "Production Qty": prod_qty,
-        "Dispatch Qty": dispatch,
-        "Return Qty": return_qty,
-        "Stock Adjustment": adjustment,
-        "Stock Ledger": STOCK_LEDGER,
-        "Delivery Challan": challans,
-        "Delivery Challan Items": challan_items,
+        "Production": production, "Item Registration": items,
+        "Opening Stock": opening, "Production Qty": prod_qty,
+        "Dispatch Qty": dispatch, "Return Qty": return_qty,
+        "Stock Adjustment": adjustment, "Stock Ledger": STOCK_LEDGER,
+        "Delivery Challan": challans, "Delivery Challan Items": challan_items,
         "Return Challan": return_challans,
         "Return Challan Items": return_challan_items,
-        "Invoice": invoices,
-        "Invoice Items": invoice_items,
+        "Invoice": invoices, "Invoice Items": invoice_items,
     }
 
     src = st.selectbox("Select a dataset", list(sources.keys()))
     df_chart = sources[src].copy()
-
     if df_chart.empty:
         empty_state(f"{src} has no records.")
         st.stop()
@@ -3501,7 +3349,6 @@ elif page == "Custom Charts":
                          color=(cb if cb != "(none)" else None))
         else:
             fig = None
-
         if fig is not None:
             fig.update_layout(margin=dict(l=10, r=10, t=40, b=10), height=520)
             st.plotly_chart(fig, use_container_width=True)
@@ -3512,7 +3359,6 @@ elif page == "Custom Charts":
 
 elif page == "Data Management":
     st.title("Data Management")
-
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Items", len(items))
     c2.metric("Production", len(production))
@@ -3521,22 +3367,15 @@ elif page == "Data Management":
     c5.metric("Invoices", len(invoices))
 
     st.markdown("---")
-
     for label, frame in [
-        ("Item Registration", items),
-        ("Production", production),
-        ("Opening Stock", opening),
-        ("Production Qty", prod_qty),
-        ("Dispatch Qty", dispatch),
-        ("Return Qty", return_qty),
-        ("Closing Stock", closing),
-        ("Stock Adjustment", adjustment),
-        ("Delivery Challan", challans),
-        ("Delivery Challan Items", challan_items),
+        ("Item Registration", items), ("Production", production),
+        ("Opening Stock", opening), ("Production Qty", prod_qty),
+        ("Dispatch Qty", dispatch), ("Return Qty", return_qty),
+        ("Closing Stock", closing), ("Stock Adjustment", adjustment),
+        ("Delivery Challan", challans), ("Delivery Challan Items", challan_items),
         ("Return Challan", return_challans),
         ("Return Challan Items", return_challan_items),
-        ("Invoice", invoices),
-        ("Invoice Items", invoice_items),
+        ("Invoice", invoices), ("Invoice Items", invoice_items),
     ]:
         st.subheader(label)
         st.dataframe(frame, use_container_width=True, hide_index=True)
