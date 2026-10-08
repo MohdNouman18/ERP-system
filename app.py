@@ -918,7 +918,7 @@ color:#000;padding-top:4px;border-top:2px solid #000;}
   </div>
 </div>
 
-<div class="bar">TAX INVOICE</div>
+<div class="bar">INVOICE</div>
 
 <table>
   <thead>
