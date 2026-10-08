@@ -1,172 +1,493 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* =========================================================
+   FLEX HEAD INDUSTRIES ERP — MODERN UI
+   ========================================================= */
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Poppins:wght@600;700;800&display=swap');
+
+/* ---------- BASE ---------- */
 html, body, [class*="css"] {
-    font-family: 'Inter', sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
 }
 
 .stApp {
-    background: #f5f7fa;
+    background: linear-gradient(135deg, #f0f4f8 0%, #f8fafc 100%);
+    background-attachment: fixed;
 }
 
+/* ---------- SIDEBAR — DARK MODERN ---------- */
 [data-testid="stSidebar"] {
-    background: #101820;
-    border-right: 1px solid #25313b;
+    background: linear-gradient(180deg, #0f1720 0%, #1a2634 100%);
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.15);
 }
 
 [data-testid="stSidebar"] * {
-    color: #e9eef2 !important;
+    color: #e2e8f0 !important;
 }
 
+[data-testid="stSidebar"] .stRadio label {
+    padding: 8px 12px;
+    border-radius: 10px;
+    transition: all 0.2s ease;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13.5px;
+}
+
+[data-testid="stSidebar"] .stRadio label:hover {
+    background: rgba(43, 155, 124, 0.15);
+    transform: translateX(3px);
+}
+
+[data-testid="stSidebar"] .stRadio [aria-checked="true"] + div {
+    color: #35b58d !important;
+    font-weight: 700;
+}
+
+/* ---------- BRAND ---------- */
 .brand {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 4px 24px 4px;
+    gap: 14px;
+    padding: 6px 4px 20px 4px;
 }
 
 .brand-mark {
-    width: 42px;
-    height: 42px;
-    border-radius: 11px;
+    width: 46px;
+    height: 46px;
+    border-radius: 13px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #1f8a70, #35b58d);
+    background: linear-gradient(135deg, #1f8a70 0%, #35b58d 100%);
     color: white;
-    font-weight: 800;
+    font-weight: 900;
+    font-size: 16px;
     letter-spacing: -1px;
-    box-shadow: 0 8px 20px rgba(0,0,0,.22);
+    box-shadow: 0 10px 24px rgba(31, 138, 112, 0.35),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
 }
 
 .brand-name {
     font-weight: 800;
     font-size: 15px;
-    letter-spacing: .4px;
+    letter-spacing: 0.3px;
+    color: #ffffff;
 }
 
 .brand-sub {
     font-size: 9px;
-    letter-spacing: 1.6px;
-    color: #93a2ad !important;
-    margin-top: 2px;
+    letter-spacing: 1.8px;
+    color: #7a8fa3 !important;
+    margin-top: 3px;
+    font-weight: 600;
 }
 
+/* ---------- PAGE HEADER ---------- */
 .page-kicker {
     color: #21866e;
     font-size: 11px;
     font-weight: 800;
-    letter-spacing: 1.8px;
+    letter-spacing: 2px;
     margin-bottom: -8px;
+    text-transform: uppercase;
 }
 
 h1 {
+    font-family: 'Poppins', 'Inter', sans-serif;
     font-weight: 800 !important;
-    letter-spacing: -1px;
-    color: #16212a;
+    letter-spacing: -1.2px;
+    color: #0f1720;
+    background: linear-gradient(135deg, #0f1720 0%, #1a2c3a 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
 }
 
 h2, h3 {
+    font-family: 'Poppins', 'Inter', sans-serif;
     color: #1c2933;
     font-weight: 700;
+    letter-spacing: -0.5px;
 }
 
 .stCaption {
     color: #71808c !important;
+    font-size: 12px;
+    font-weight: 500;
 }
 
+/* ---------- METRIC CARDS — MODERN ---------- */
 .metric-card {
-    background: #ffffff;
+    background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
     border: 1px solid #e6ebef;
-    border-radius: 15px;
-    padding: 18px;
-    min-height: 142px;
-    box-shadow: 0 5px 18px rgba(16,24,32,.04);
+    border-radius: 18px;
+    padding: 22px 22px 20px 22px;
+    min-height: 155px;
+    box-shadow: 0 4px 20px rgba(16, 24, 32, 0.04),
+                0 1px 3px rgba(16, 24, 32, 0.02);
     position: relative;
     overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.metric-card:after {
+.metric-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 12px 32px rgba(16, 24, 32, 0.09),
+                0 2px 8px rgba(16, 24, 32, 0.04);
+    border-color: #c8e0d8;
+}
+
+.metric-card::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 100px;
+    height: 100px;
+    background: radial-gradient(circle at top right,
+                rgba(43, 155, 124, 0.08), transparent 70%);
+    pointer-events: none;
+}
+
+.metric-card::after {
     content: "";
     position: absolute;
     left: 0;
     bottom: 0;
-    width: 42px;
-    height: 3px;
-    background: #2b9b7c;
-    border-radius: 0 5px 0 0;
+    width: 46px;
+    height: 4px;
+    background: linear-gradient(90deg, #2b9b7c, #35b58d);
+    border-radius: 0 6px 0 0;
 }
 
 .metric-icon {
     float: right;
     color: #2b9b7c;
-    font-size: 21px;
-    font-weight: 700;
+    font-size: 22px;
+    font-weight: 800;
+    opacity: 0.9;
 }
 
 .metric-label {
-    font-size: 12px;
-    color: #72808b;
-    font-weight: 600;
-    margin-bottom: 8px;
+    font-size: 11.5px;
+    color: #5f7080;
+    font-weight: 700;
+    margin-bottom: 10px;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
 }
 
 .metric-value {
-    font-size: 27px;
-    color: #17232c;
+    font-family: 'Poppins', sans-serif;
+    font-size: 30px;
+    color: #0f1720;
     font-weight: 800;
-    letter-spacing: -1px;
+    letter-spacing: -1.2px;
+    line-height: 1.1;
 }
 
 .metric-caption {
     font-size: 11px;
-    color: #8a969f;
-    margin-top: 8px;
+    color: #8896a1;
+    margin-top: 10px;
+    font-weight: 500;
 }
 
 .section-gap {
-    height: 12px;
+    height: 16px;
 }
 
+/* ---------- TABS — MODERN PILLS ---------- */
 .stTabs [data-baseweb="tab-list"] {
-    gap: 8px;
-    border-bottom: 1px solid #e2e8ec;
+    gap: 6px;
+    border-bottom: 2px solid #e2e8ec;
+    padding-bottom: 4px;
 }
 
 .stTabs [data-baseweb="tab"] {
     font-weight: 600;
+    font-size: 13.5px;
+    padding: 8px 18px;
+    border-radius: 10px 10px 0 0;
+    color: #64748b;
+    transition: all 0.2s ease;
 }
 
+.stTabs [data-baseweb="tab"]:hover {
+    background: rgba(43, 155, 124, 0.06);
+    color: #21866e;
+}
+
+.stTabs [aria-selected="true"] {
+    background: linear-gradient(180deg, #e8f6f2 0%, #f0faf7 100%);
+    color: #1a7a5e !important;
+    font-weight: 700;
+    border-bottom: 3px solid #2b9b7c;
+}
+
+/* ---------- DATAFRAMES — MODERN ---------- */
 div[data-testid="stDataFrame"] {
     border: 1px solid #e1e7eb;
-    border-radius: 12px;
+    border-radius: 14px;
     overflow: hidden;
+    box-shadow: 0 2px 8px rgba(16, 24, 32, 0.03);
 }
 
-.stButton > button, .stDownloadButton > button {
-    border-radius: 9px;
+div[data-testid="stDataFrame"] table {
+    font-size: 13px;
+}
+
+div[data-testid="stDataFrame"] thead th {
+    background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%) !important;
+    font-weight: 700 !important;
+    color: #334155 !important;
+    border-bottom: 2px solid #e2e8ec !important;
+}
+
+/* ---------- BUTTONS — VIBRANT ---------- */
+.stButton > button,
+.stDownloadButton > button {
+    border-radius: 10px;
     font-weight: 700;
-    border: 1px solid #d8e0e5;
+    border: 1.5px solid #d8e0e5;
+    padding: 8px 18px;
+    transition: all 0.2s ease;
+    background: #ffffff;
+    color: #334155;
+}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+    border-color: #2b9b7c;
+    color: #21866e;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(43, 155, 124, 0.15);
 }
 
 button[kind="primary"] {
-    background: #21866e !important;
+    background: linear-gradient(135deg, #21866e 0%, #2b9b7c 100%) !important;
     border-color: #21866e !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 14px rgba(33, 134, 110, 0.28);
 }
 
-.stTextInput input, .stNumberInput input, .stDateInput input,
+button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #1a6f5a 0%, #248a6d 100%) !important;
+    box-shadow: 0 6px 20px rgba(33, 134, 110, 0.4);
+    transform: translateY(-2px);
+}
+
+button[kind="secondary"] {
+    background: #ffffff;
+    border-color: #cbd5e1 !important;
+    color: #475569 !important;
+}
+
+button[kind="secondary"]:hover {
+    background: #fef2f2;
+    border-color: #dc2626 !important;
+    color: #dc2626 !important;
+}
+
+/* ---------- INPUTS — MODERN ---------- */
+.stTextInput input,
+.stNumberInput input,
+.stDateInput input,
+.stTextArea textarea,
 [data-baseweb="select"] > div {
-    border-radius: 8px !important;
+    border-radius: 10px !important;
+    border: 1.5px solid #e2e8ec !important;
+    transition: all 0.2s ease;
+    background: #ffffff !important;
 }
 
+.stTextInput input:focus,
+.stNumberInput input:focus,
+.stDateInput input:focus,
+.stTextArea textarea:focus {
+    border-color: #2b9b7c !important;
+    box-shadow: 0 0 0 3px rgba(43, 155, 124, 0.1) !important;
+}
+
+[data-baseweb="select"] > div:hover {
+    border-color: #94a3b8 !important;
+}
+
+/* ---------- EXPANDER ---------- */
 div[data-testid="stExpander"] {
     border: 1px solid #e1e7eb;
-    border-radius: 12px;
-    background: #fff;
+    border-radius: 14px;
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(16, 24, 32, 0.03);
+    overflow: hidden;
 }
 
+div[data-testid="stExpander"] summary {
+    font-weight: 700;
+    color: #334155;
+    padding: 12px 16px;
+    background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+}
+
+div[data-testid="stExpander"] summary:hover {
+    background: #f0faf7;
+    color: #21866e;
+}
+
+/* ---------- STREAMLIT METRIC ---------- */
 [data-testid="stMetric"] {
-    background: white;
+    background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
     border: 1px solid #e5eaee;
-    padding: 12px;
+    padding: 16px 18px;
+    border-radius: 14px;
+    box-shadow: 0 2px 8px rgba(16, 24, 32, 0.03);
+    transition: all 0.2s ease;
+}
+
+[data-testid="stMetric"]:hover {
+    border-color: #c8e0d8;
+    box-shadow: 0 6px 18px rgba(16, 24, 32, 0.06);
+}
+
+[data-testid="stMetricLabel"] {
+    font-size: 12px !important;
+    color: #5f7080 !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+[data-testid="stMetricValue"] {
+    font-family: 'Poppins', sans-serif !important;
+    font-size: 26px !important;
+    font-weight: 800 !important;
+    color: #0f1720 !important;
+    letter-spacing: -0.8px;
+}
+
+/* ---------- ALERTS — MODERN ---------- */
+.stAlert {
     border-radius: 12px;
+    border-left-width: 4px;
+    box-shadow: 0 2px 10px rgba(16, 24, 32, 0.04);
+}
+
+/* ---------- FILE UPLOADER ---------- */
+[data-testid="stFileUploader"] {
+    border: 2px dashed #cbd5e1;
+    border-radius: 14px;
+    padding: 12px;
+    background: linear-gradient(135deg, #fafcff 0%, #f4f9ff 100%);
+    transition: all 0.2s ease;
+}
+
+[data-testid="stFileUploader"]:hover {
+    border-color: #2b9b7c;
+    background: linear-gradient(135deg, #f0faf7 0%, #e8f6f2 100%);
+}
+
+/* ---------- DIVIDER ---------- */
+hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg,
+                transparent 0%,
+                #e2e8ec 20%,
+                #e2e8ec 80%,
+                transparent 100%);
+    margin: 20px 0;
+}
+
+/* ---------- SCROLLBAR ---------- */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 6px;
+    border: 2px solid #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+/* ---------- SUCCESS / INFO BOXES ---------- */
+.stSuccess {
+    background: linear-gradient(135deg, #f0fdf4 0%, #e8f9ee 100%);
+    border-color: #16a34a;
+    border-radius: 12px;
+}
+
+.stInfo {
+    background: linear-gradient(135deg, #eff6ff 0%, #e6f0ff 100%);
+    border-color: #2563eb;
+    border-radius: 12px;
+}
+
+.stWarning {
+    background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+    border-color: #f59e0b;
+    border-radius: 12px;
+}
+
+.stError {
+    background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+    border-color: #dc2626;
+    border-radius: 12px;
+}
+
+/* ---------- RADIO / CHECKBOX ---------- */
+.stRadio [role="radiogroup"] label,
+.stCheckbox label {
+    padding: 6px 8px;
+    border-radius: 8px;
+    transition: background 0.15s ease;
+}
+
+.stRadio [role="radiogroup"] label:hover {
+    background: rgba(43, 155, 124, 0.06);
+}
+
+/* ---------- MAIN CONTENT PADDING ---------- */
+.block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1400px;
+}
+
+/* ---------- SIDEBAR BUTTON ---------- */
+[data-testid="stSidebar"] .stButton > button {
+    background: rgba(43, 155, 124, 0.15);
+    border: 1px solid rgba(43, 155, 124, 0.3);
+    color: #35b58d !important;
+    font-weight: 700;
+    transition: all 0.2s ease;
+}
+
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(43, 155, 124, 0.25);
+    border-color: #35b58d;
+    transform: translateY(-1px);
+}
+
+/* ---------- SIDEBAR LOGO ---------- */
+[data-testid="stSidebar"] img {
+    border-radius: 12px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+}
+
+/* ---------- PRINT FRIENDLY ---------- */
+@media print {
+    .stApp {
+        background: #ffffff;
+    }
 }
