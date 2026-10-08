@@ -28,6 +28,8 @@ CHALLAN_TABLE = "Delivery_Challan"
 CHALLAN_ITEMS_TABLE = "Delivery_Challan_Items"
 RETURN_CHALLAN_TABLE = "Return_Challan"
 RETURN_CHALLAN_ITEMS_TABLE = "Return_Challan_Items"
+INVOICE_TABLE = "Invoice"
+INVOICE_ITEMS_TABLE = "Invoice_Items"
 
 ITEM_COLUMNS = (
     "Item_ID", "Item_Code", "Material_Grade", "Application",
@@ -68,6 +70,17 @@ RETURN_CHALLAN_ITEMS_COLUMNS = (
     "challan_item_id", "challan_id", "sr_no",
     "item_id", "description", "quantity", "unit", "created_at"
 )
+INVOICE_COLUMNS = (
+    "invoice_id", "invoice_no", "invoice_date", "customer_name",
+    "contact_detail", "dc_id", "sales_head", "bank", "payment_mode",
+    "cartage", "amount_received", "current_bill_amt", "outstanding",
+    "remarks", "created_at"
+)
+INVOICE_ITEMS_COLUMNS = (
+    "invoice_item_id", "invoice_id", "sr_no", "item_id",
+    "description", "quantity", "price_per_unit", "amount",
+    "unit", "created_at"
+)
 
 ID_PREFIX = {
     ITEM_TABLE:           ("Item_ID",          "ITM"),
@@ -84,6 +97,7 @@ CACHE_TTL = 300
 PRODUCTION_LINES = ["Machine 01", "Machine 02", "Machine 03"]
 PRODUCTION_STATUSES = ["Completed", "In Progress", "Pending", "Rejected"]
 ADJUSTMENT_REASONS = ["Physical Check", "Damage", "Loss", "Found", "Other"]
+PAYMENT_MODES = ["Cash", "Cheque", "Pay Order", "Online Transfer", "Credit"]
 
 COMPANY_NAME = "FLEX HEAD INDUSTRIES PVT LTD"
 COMPANY_ADDR_LINE1 = (
@@ -237,6 +251,10 @@ def load_all_data():
         (RETURN_CHALLAN_TABLE, RETURN_CHALLAN_COLUMNS, ()),
         (RETURN_CHALLAN_ITEMS_TABLE, RETURN_CHALLAN_ITEMS_COLUMNS,
          ("quantity", "sr_no")),
+        (INVOICE_TABLE, INVOICE_COLUMNS,
+         ("cartage", "amount_received", "current_bill_amt", "outstanding")),
+        (INVOICE_ITEMS_TABLE, INVOICE_ITEMS_COLUMNS,
+         ("quantity", "price_per_unit", "amount", "sr_no")),
     ]
 
     with ThreadPoolExecutor(max_workers=len(specs)) as pool:
@@ -255,16 +273,27 @@ def load_all_data():
     items, production,
     opening, prod_qty, dispatch, return_qty, closing, adjustment,
     challans, challan_items, return_challans, return_challan_items,
+    invoices, invoice_items,
     items_err, production_err,
     opening_err, prod_qty_err, dispatch_err, return_err,
     closing_err, adjustment_err,
     challans_err, challan_items_err,
-    return_challans_err, return_challan_items_err
+    return_challans_err, return_challan_items_err,
+    invoices_err, invoice_items_err
 ) = load_all_data()
 
 
+# =========================================================
+# ITEM LOOKUP — Full auto description with " - " separator
+# =========================================================
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_item_lookup(items_df):
+    """
+    Item_ID -> full auto description.
+    Format: Material Grade - Application - Dia - Wall Thickness - SDR - Color - Standard Length - Unit
+    Empty attributes are skipped.
+    """
     if items_df.empty:
         return {}
     lookup = {}
@@ -272,6 +301,7 @@ def build_item_lookup(items_df):
         iid = str(row.get("Item_ID", "") or "").strip()
         if not iid:
             continue
+
         parts = []
 
         def _add(val, prefix=""):
@@ -293,9 +323,11 @@ def build_item_lookup(items_df):
         _add(row.get("Wall_Thickness_mm"), "WT ")
         _add(row.get("SDR"), "SDR ")
         _add(row.get("Color"))
+        _add(row.get("Standard_Length"), "L ")
         _add(row.get("Unit"))
 
-        lookup[iid] = " | ".join(parts)
+        # Join with " - " separator
+        lookup[iid] = " - ".join(parts)
     return lookup
 
 
@@ -335,6 +367,23 @@ def next_challan_no(df, kind="DC"):
         return f"{prefix}001"
     nums = []
     for v in df["challan_no"].dropna().astype(str):
+        if v.startswith(prefix):
+            try:
+                nums.append(int(v[len(prefix):]))
+            except ValueError:
+                continue
+    if not nums:
+        return f"{prefix}001"
+    return f"{prefix}{max(nums) + 1:03d}"
+
+
+def next_invoice_no(df):
+    today = date.today()
+    prefix = f"INV-{today.year}-"
+    if df.empty or "invoice_no" not in df.columns:
+        return f"{prefix}001"
+    nums = []
+    for v in df["invoice_no"].dropna().astype(str):
         if v.startswith(prefix):
             try:
                 nums.append(int(v[len(prefix):]))
@@ -414,12 +463,29 @@ def get_item_options(items_df):
     return items_df["Item_ID"].astype(str).tolist()
 
 
+@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
+def get_dc_options(challans_df):
+    """Return list of (label, challan_id) for DC dropdown."""
+    if challans_df.empty:
+        return []
+    opts = []
+    for _, row in challans_df.iterrows():
+        no = str(row.get("challan_no", ""))
+        d = fmt_date_only(row.get("challan_date", ""))
+        cn = str(row.get("customer_name", "") or "")
+        cid = row.get("challan_id")
+        label = f"{no} • {d} • {cn}"
+        opts.append((label, cid))
+    return opts
+
+
 def refresh_all():
     load_all_data.clear()
     get_item_options.clear()
     compute_stock_ledger.clear()
     compute_totals.clear()
     build_item_lookup.clear()
+    get_dc_options.clear()
     st.rerun()
 
 
@@ -494,6 +560,107 @@ def logo_html():
     </svg>"""
 
 
+
+# =========================================================
+# SHARED LETTERHEAD BLOCK (used by Challan + Invoice)
+# =========================================================
+
+def _letterhead_block():
+    logo_markup = logo_html()
+    return f"""
+<div class="hdr-flex">
+  <div class="logo-left">{logo_markup}</div>
+  <div class="letterhead">
+    <div class="cname">{COMPANY_NAME}</div>
+    <div class="caddr">
+      <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
+      <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
+      <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
+    </div>
+  </div>
+</div>
+"""
+
+
+def _shared_print_css(extra_css=""):
+    return f"""
+.challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
+padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
+.challan-page .hdr-flex{{display:flex;align-items:center;gap:12px;
+margin-bottom:10px;padding-bottom:12px;border-bottom:2px solid #000;}}
+.challan-page .logo-left{{width:130px;flex-shrink:0;text-align:left;}}
+.challan-page .logo-left img{{width:120px;height:auto;display:block;}}
+.challan-page .logo-left svg{{width:120px;height:auto;display:block;}}
+.challan-page .letterhead{{flex:1;text-align:center;padding-right:130px;}}
+.challan-page .cname{{font-size:22px;font-weight:900;letter-spacing:1px;
+margin:0 0 5px 0;color:#000;}}
+.challan-page .caddr{{font-size:10px;line-height:1.5;color:#000;}}
+.challan-page .caddr-line{{margin:1px 0;}}
+.challan-page .meta-row{{display:flex;justify-content:space-between;
+font-size:12px;margin:12px 0 8px 0;gap:20px;padding:6px 0;}}
+.challan-page .meta-row b{{font-weight:900;}}
+.challan-page .meta-row span{{font-weight:400;}}
+.challan-page .cust-box{{border:1px solid #000;padding:8px 12px;
+margin:8px 0 12px 0;background:#f9f9f9;}}
+.challan-page .cust-grid{{display:grid;
+grid-template-columns:1fr 1fr 1fr;gap:6px 20px;font-size:11px;}}
+.challan-page .cust-item{{line-height:1.5;}}
+.challan-page .cust-item b{{font-weight:900;}}
+.challan-page .bar{{background:#000;color:#fff;text-align:center;
+font-weight:900;font-size:18px;letter-spacing:3px;padding:10px 0;
+margin:10px 0 12px 0;}}
+.challan-page table{{width:100%;border-collapse:collapse;font-size:11px;}}
+.challan-page th,.challan-page td{{border:1px solid #000;padding:6px 8px;
+vertical-align:middle;height:22px;}}
+.challan-page th{{background:#f2f2f2;font-weight:900;text-transform:uppercase;
+font-size:12px;padding:8px;text-align:center;}}
+.challan-page td.c{{text-align:center;}}
+.challan-page td.r{{text-align:right;}}
+.challan-page .ftr{{display:flex;justify-content:space-between;
+margin-top:60px;font-size:11px;font-weight:900;gap:20px;}}
+.challan-page .sig{{width:30%;text-align:center;}}
+.challan-page .sig-value{{min-height:22px;font-size:12px;
+font-weight:700;margin-bottom:6px;color:#000;padding-top:6px;}}
+.challan-page .sig-line{{border-top:1.5px solid #000;margin:0 auto;width:100%;}}
+.challan-page .sig-label{{text-transform:uppercase;letter-spacing:0.5px;
+padding-top:5px;font-weight:900;}}
+.challan-page .stamp-area{{margin-top:40px;display:flex;
+justify-content:flex-end;}}
+.challan-page .stamp-box{{width:180px;height:90px;border:1.5px dashed #555;
+display:flex;align-items:center;justify-content:center;
+color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
+{extra_css}
+@media print{{
+  body *{{visibility:hidden;}}
+  #challan-print, #challan-print *{{visibility:visible;}}
+  #challan-print{{position:absolute;left:0;top:0;width:100%;padding:0;
+                 font-size:11px;}}
+  #challan-print .hdr-flex{{margin-bottom:6px;padding-bottom:8px;gap:8px;}}
+  #challan-print .logo-left{{width:110px;}}
+  #challan-print .logo-left img, #challan-print .logo-left svg{{width:100px;}}
+  #challan-print .letterhead{{padding-right:110px;}}
+  #challan-print .cname{{font-size:18px;margin:0 0 3px 0;}}
+  #challan-print .caddr{{font-size:9px;line-height:1.3;}}
+  #challan-print .meta-row{{font-size:11px;margin:8px 0 6px 0;padding:4px 0;}}
+  #challan-print .cust-box{{padding:6px 10px;margin:6px 0 8px 0;}}
+  #challan-print .cust-grid{{font-size:10px;gap:4px 16px;}}
+  #challan-print .bar{{font-size:16px;padding:7px 0;margin:6px 0 8px 0;}}
+  #challan-print th, #challan-print td{{padding:4px 6px;
+    font-size:10.5px;height:18px;}}
+  #challan-print th{{padding:6px;font-size:11px;}}
+  #challan-print .ftr{{margin-top:30px;font-size:10px;}}
+  #challan-print .sig-value{{min-height:16px;font-size:11px;padding-top:3px;}}
+  #challan-print .stamp-area{{margin-top:20px;}}
+  #challan-print .stamp-box{{width:140px;height:70px;font-size:10px;}}
+  @page{{margin:10mm; size:A4 portrait;}}
+}}
+"""
+
+
+# =========================================================
+# CHALLAN HTML BUILDER
+# =========================================================
+
 def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
     challan_no = header_row.get("challan_no", "") or ""
     challan_date = fmt_date_only(header_row.get("challan_date", ""))
@@ -541,8 +708,6 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
     for _ in range(max(0, MIN_ROWS - count)):
         rows_html += """<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>"""
 
-    logo_markup = logo_html()
-
     def _sig_block(label, value):
         val_display = value if value else "&nbsp;"
         return f"""
@@ -571,92 +736,9 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 
     return f"""
 <div id="challan-print" class="challan-page">
-<style>
-.challan-page{{font-family:Arial,Helvetica,sans-serif;color:#000;background:#fff;
-padding:20px 25px;max-width:920px;margin:0 auto;font-size:12px;}}
+<style>{_shared_print_css()}</style>
 
-/* ---- HEADER: LOGO LEFT, LETTERHEAD CENTER ---- */
-.challan-page .hdr-flex{{display:flex;align-items:center;gap:12px;
-margin-bottom:10px;padding-bottom:12px;border-bottom:2px solid #000;}}
-.challan-page .logo-left{{width:130px;flex-shrink:0;text-align:left;}}
-.challan-page .logo-left img{{width:120px;height:auto;display:block;}}
-.challan-page .logo-left svg{{width:120px;height:auto;display:block;}}
-.challan-page .letterhead{{flex:1;text-align:center;padding-right:130px;}}
-.challan-page .cname{{font-size:22px;font-weight:900;letter-spacing:1px;
-margin:0 0 5px 0;color:#000;}}
-.challan-page .caddr{{font-size:10px;line-height:1.5;color:#000;}}
-.challan-page .caddr-line{{margin:1px 0;}}
-
-.challan-page .meta-row{{display:flex;justify-content:space-between;
-font-size:12px;margin:12px 0 8px 0;gap:20px;padding:6px 0;}}
-.challan-page .meta-row b{{font-weight:900;}}
-.challan-page .meta-row span{{font-weight:400;}}
-.challan-page .cust-box{{border:1px solid #000;padding:8px 12px;
-margin:8px 0 12px 0;background:#f9f9f9;}}
-.challan-page .cust-grid{{display:grid;
-grid-template-columns:1fr 1fr 1fr;gap:6px 20px;font-size:11px;}}
-.challan-page .cust-item{{line-height:1.5;}}
-.challan-page .cust-item b{{font-weight:900;}}
-.challan-page .bar{{background:#000;color:#fff;text-align:center;
-font-weight:900;font-size:18px;letter-spacing:3px;padding:10px 0;
-margin:10px 0 12px 0;}}
-.challan-page table{{width:100%;border-collapse:collapse;font-size:11px;}}
-.challan-page th,.challan-page td{{border:1px solid #000;padding:6px 8px;
-vertical-align:middle;height:22px;}}
-.challan-page th{{background:#f2f2f2;font-weight:900;text-transform:uppercase;
-font-size:12px;padding:8px;text-align:center;}}
-.challan-page td.c{{text-align:center;}}
-.challan-page .ftr{{display:flex;justify-content:space-between;
-margin-top:60px;font-size:11px;font-weight:900;gap:20px;}}
-.challan-page .sig{{width:30%;text-align:center;}}
-.challan-page .sig-value{{min-height:22px;font-size:12px;
-font-weight:700;margin-bottom:6px;color:#000;padding-top:6px;}}
-.challan-page .sig-line{{border-top:1.5px solid #000;margin:0 auto;width:100%;}}
-.challan-page .sig-label{{text-transform:uppercase;letter-spacing:0.5px;
-padding-top:5px;font-weight:900;}}
-.challan-page .stamp-area{{margin-top:40px;display:flex;
-justify-content:flex-end;}}
-.challan-page .stamp-box{{width:180px;height:90px;border:1.5px dashed #555;
-display:flex;align-items:center;justify-content:center;
-color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
-
-@media print{{
-  body *{{visibility:hidden;}}
-  #challan-print, #challan-print *{{visibility:visible;}}
-  #challan-print{{position:absolute;left:0;top:0;width:100%;padding:0;
-                 font-size:11px;}}
-  #challan-print .hdr-flex{{margin-bottom:6px;padding-bottom:8px;gap:8px;}}
-  #challan-print .logo-left{{width:110px;}}
-  #challan-print .logo-left img, #challan-print .logo-left svg{{width:100px;}}
-  #challan-print .letterhead{{padding-right:110px;}}
-  #challan-print .cname{{font-size:18px;margin:0 0 3px 0;}}
-  #challan-print .caddr{{font-size:9px;line-height:1.3;}}
-  #challan-print .meta-row{{font-size:11px;margin:8px 0 6px 0;padding:4px 0;}}
-  #challan-print .cust-box{{padding:6px 10px;margin:6px 0 8px 0;}}
-  #challan-print .cust-grid{{font-size:10px;gap:4px 16px;}}
-  #challan-print .bar{{font-size:16px;padding:7px 0;margin:6px 0 8px 0;}}
-  #challan-print th, #challan-print td{{padding:4px 6px;
-    font-size:10.5px;height:18px;}}
-  #challan-print th{{padding:6px;font-size:11px;}}
-  #challan-print .ftr{{margin-top:30px;font-size:10px;}}
-  #challan-print .sig-value{{min-height:16px;font-size:11px;padding-top:3px;}}
-  #challan-print .stamp-area{{margin-top:20px;}}
-  #challan-print .stamp-box{{width:140px;height:70px;font-size:10px;}}
-  @page{{margin:10mm; size:A4 portrait;}}
-}}
-</style>
-
-<div class="hdr-flex">
-  <div class="logo-left">{logo_markup}</div>
-  <div class="letterhead">
-    <div class="cname">{COMPANY_NAME}</div>
-    <div class="caddr">
-      <div class="caddr-line">{COMPANY_ADDR_LINE1}</div>
-      <div class="caddr-line">{COMPANY_ADDR_LINE2}</div>
-      <div class="caddr-line">{COMPANY_ADDR_LINE3}</div>
-    </div>
-  </div>
-</div>
+{_letterhead_block()}
 
 <div class="meta-row">
   <div><b>Challan No:</b> <span>{challan_no}</span></div>
@@ -696,10 +778,219 @@ color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
 """
 
 
+# =========================================================
+# INVOICE HTML BUILDER
+# =========================================================
+
+def build_invoice_html(header_row, items_df):
+    invoice_no = header_row.get("invoice_no", "") or ""
+    invoice_date = fmt_date_only(header_row.get("invoice_date", ""))
+
+    def _clean(v):
+        if v is None:
+            return ""
+        s = str(v).strip()
+        if s.lower() in ("nan", "none", "null"):
+            return ""
+        return s
+
+    customer_name = _clean(header_row.get("customer_name", ""))
+    contact_detail = _clean(header_row.get("contact_detail", ""))
+    sales_head = _clean(header_row.get("sales_head", ""))
+    dc_id = header_row.get("dc_id")
+    # Lookup DC No from challans df
+    dc_no = ""
+    if dc_id is not None and not challans.empty:
+        try:
+            m = challans[challans["challan_id"] == dc_id]
+            if not m.empty:
+                dc_no = str(m.iloc[0].get("challan_no", ""))
+        except Exception:
+            pass
+
+    bank = _clean(header_row.get("bank", ""))
+    payment_mode = _clean(header_row.get("payment_mode", ""))
+    cartage = float(header_row.get("cartage", 0) or 0)
+    amount_received = float(header_row.get("amount_received", 0) or 0)
+    current_bill_amt = float(header_row.get("current_bill_amt", 0) or 0)
+    outstanding = float(header_row.get("outstanding", 0) or 0)
+    remarks = _clean(header_row.get("remarks", ""))
+
+    def _fmt_money(v):
+        try:
+            return f"{float(v):,.2f}"
+        except Exception:
+            return "0.00"
+
+    rows_html = ""
+    MIN_ROWS = 10
+    count = 0
+    total_amount = 0.0
+
+    if items_df is not None and not items_df.empty:
+        for _, r in items_df.iterrows():
+            sr = r.get("sr_no", "")
+            desc = r.get("description", "") or ""
+            qty = r.get("quantity", "")
+            price = r.get("price_per_unit", "")
+            amt = r.get("amount", "")
+            unit = r.get("unit", "") or ""
+            try:
+                qty_str = f"{float(qty):,.2f}".rstrip("0").rstrip(".")
+            except Exception:
+                qty_str = str(qty)
+            try:
+                price_str = f"{float(price):,.2f}"
+            except Exception:
+                price_str = str(price)
+            try:
+                amt_val = float(amt)
+                amt_str = f"{amt_val:,.2f}"
+                total_amount += amt_val
+            except Exception:
+                amt_str = str(amt)
+
+            rows_html += f"""<tr>
+                <td class="c">{sr}</td>
+                <td>{desc}</td>
+                <td class="c">{qty_str}</td>
+                <td class="c">{unit}</td>
+                <td class="r">{price_str}</td>
+                <td class="r">{amt_str}</td>
+            </tr>"""
+            count += 1
+
+    for _ in range(max(0, MIN_ROWS - count)):
+        rows_html += """<tr><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td></tr>"""
+
+    def _sig_block(label, value):
+        val_display = value if value else "&nbsp;"
+        return f"""
+        <div class="sig">
+          <div class="sig-value">{val_display}</div>
+          <div class="sig-line"></div>
+          <div class="sig-label">{label}</div>
+        </div>
+        """
+
+    def _cust_row(label, value):
+        if not value:
+            return ""
+        return f'<div class="cust-item"><b>{label}:</b> <span>{value}</span></div>'
+
+    customer_block = ""
+    for lbl, val in [
+        ("Customer Name", customer_name),
+        ("Contact Detail", contact_detail),
+        ("DC No.", dc_no),
+        ("Sales Head", sales_head),
+    ]:
+        customer_block += _cust_row(lbl, val)
+
+    # Client Profile section (bank, payment, cartage, amounts)
+    profile_block = ""
+    for lbl, val in [
+        ("Bank", bank),
+        ("Payment Mode", payment_mode),
+        ("Cartage", _fmt_money(cartage) if cartage else ""),
+    ]:
+        profile_block += _cust_row(lbl, val)
+
+    extra_css = """
+.challan-page .totals-box{border:1.5px solid #000;padding:8px 12px;
+margin-top:12px;background:#f9f9f9;}
+.challan-page .totals-grid{display:grid;
+grid-template-columns:1fr 1fr;gap:6px 20px;font-size:11.5px;}
+.challan-page .tot-row{display:flex;justify-content:space-between;
+padding:3px 0;border-bottom:1px dashed #ccc;}
+.challan-page .tot-row:last-child{border-bottom:none;}
+.challan-page .tot-row b{font-weight:900;}
+.challan-page .grand-total{font-size:13px;font-weight:900;
+color:#000;padding-top:4px;border-top:2px solid #000;}
+"""
+
+    return f"""
+<div id="challan-print" class="challan-page">
+<style>{_shared_print_css(extra_css)}</style>
+
+{_letterhead_block()}
+
+<div class="meta-row">
+  <div><b>Invoice No:</b> <span>{invoice_no}</span></div>
+  <div><b>Date:</b> <span>{invoice_date}</span></div>
+</div>
+
+<div class="cust-box">
+  <div class="cust-grid">
+    {customer_block if customer_block else '<div class="cust-item"><i>No customer details</i></div>'}
+  </div>
+</div>
+
+<div class="bar">TAX INVOICE</div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:8%;">SR NO</th>
+      <th style="width:42%;">DESCRIPTION</th>
+      <th style="width:10%;">QTY</th>
+      <th style="width:10%;">UNIT</th>
+      <th style="width:15%;">PRICE/UNIT</th>
+      <th style="width:15%;">AMOUNT</th>
+    </tr>
+  </thead>
+  <tbody>{rows_html}</tbody>
+</table>
+
+<div class="totals-box">
+  <div class="totals-grid">
+    <div class="tot-row">
+      <span>Total Items Amount:</span>
+      <b>{_fmt_money(total_amount)}</b>
+    </div>
+    <div class="tot-row">
+      <span>Cartage:</span>
+      <b>{_fmt_money(cartage)}</b>
+    </div>
+    <div class="tot-row grand-total">
+      <span>Current Bill Amount:</span>
+      <b>{_fmt_money(current_bill_amt)}</b>
+    </div>
+    <div class="tot-row">
+      <span>Amount Received:</span>
+      <b>{_fmt_money(amount_received)}</b>
+    </div>
+    <div class="tot-row">
+      <span>Outstanding:</span>
+      <b>{_fmt_money(outstanding)}</b>
+    </div>
+  </div>
+</div>
+
+<div class="cust-box" style="margin-top:10px;">
+  <div class="cust-grid">
+    {profile_block if profile_block else '<div class="cust-item"><i>No client profile info</i></div>'}
+  </div>
+  {f'<div class="cust-item" style="margin-top:6px;"><b>Remarks:</b> {remarks}</div>' if remarks else ''}
+</div>
+
+<div class="ftr">
+  {_sig_block("Prepared By", sales_head)}
+  {_sig_block("Received By", "")}
+  {_sig_block("Authorized Signatory", "")}
+</div>
+
+<div class="stamp-area">
+  <div class="stamp-box">STAMP</div>
+</div>
+</div>
+"""
+
+
 def build_printable_html_page(challan_html):
     return f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Challan</title></head>
+<head><meta charset="utf-8"><title>Document</title></head>
 <body style="margin:0;background:#f5f5f5;">
 <div style="text-align:center;padding:14px;background:#222;">
   <button onclick="window.print()"
@@ -835,6 +1126,7 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
 
 
 def challan_items_editor(key_prefix):
+    """Auto-fill description from item lookup with '-' separator."""
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -877,6 +1169,16 @@ def challan_items_editor(key_prefix):
                 if new_val != cur:
                     row["item_id"] = new_val
                     row["description"] = auto_description(new_val)
+                    # auto-set unit from item
+                    try:
+                        if not items.empty and new_val != "(none)":
+                            m = items[items["Item_ID"].astype(str) == str(new_val)]
+                            if not m.empty:
+                                u = m.iloc[0].get("Unit", "")
+                                if pd.notna(u) and str(u).strip():
+                                    row["unit"] = str(u).strip()
+                    except Exception:
+                        pass
                     st.rerun()
                 else:
                     row["item_id"] = new_val
@@ -936,6 +1238,137 @@ def challan_items_editor(key_prefix):
     return st.session_state[state_key]
 
 
+def invoice_items_editor(key_prefix):
+    """Invoice items editor with price, amount + auto-fill description."""
+    state_key = f"{key_prefix}_rows"
+    counter_key = f"{key_prefix}_counter"
+
+    if state_key not in st.session_state:
+        st.session_state[state_key] = [
+            {"id": 1, "item_id": "(none)", "description": "",
+             "quantity": 0.0, "unit": "Meter",
+             "price_per_unit": 0.0, "amount": 0.0}
+        ]
+        st.session_state[counter_key] = 1
+
+    item_options = get_item_options(items)
+    rows = st.session_state[state_key]
+
+    hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns([0.4, 1.8, 3.5, 1.5, 1.4, 1.5, 1.5])
+    with hc1: st.markdown("**#**")
+    with hc2: st.markdown("**Item ID**")
+    with hc3: st.markdown("**Description (auto)**")
+    with hc4: st.markdown("**Qty**")
+    with hc5: st.markdown("**Unit**")
+    with hc6: st.markdown("**Price/Unit**")
+    with hc7: st.markdown("**Amount**")
+
+    to_remove = None
+
+    for idx, row in enumerate(rows):
+        rid = row["id"]
+        c1, c2, c3, c4, c5, c6, c7 = st.columns([0.4, 1.8, 3.5, 1.5, 1.4, 1.5, 1.5])
+
+        with c1:
+            st.markdown(f"**{idx + 1}**")
+
+        with c2:
+            if item_options:
+                opts = ["(none)"] + item_options
+                cur = row.get("item_id", "(none)")
+                pos = opts.index(cur) if cur in opts else 0
+                new_val = st.selectbox(
+                    "Item ID", opts, index=pos,
+                    key=f"{key_prefix}_item_{rid}",
+                    label_visibility="collapsed"
+                )
+                if new_val != cur:
+                    row["item_id"] = new_val
+                    row["description"] = auto_description(new_val)
+                    try:
+                        if not items.empty and new_val != "(none)":
+                            m = items[items["Item_ID"].astype(str) == str(new_val)]
+                            if not m.empty:
+                                u = m.iloc[0].get("Unit", "")
+                                if pd.notna(u) and str(u).strip():
+                                    row["unit"] = str(u).strip()
+                    except Exception:
+                        pass
+                    st.rerun()
+                else:
+                    row["item_id"] = new_val
+            else:
+                row["item_id"] = st.text_input(
+                    "Item ID", value=row.get("item_id", ""),
+                    key=f"{key_prefix}_itemtxt_{rid}",
+                    label_visibility="collapsed"
+                )
+
+        with c3:
+            row["description"] = st.text_input(
+                "Description", value=row.get("description", ""),
+                key=f"{key_prefix}_desc_{rid}",
+                label_visibility="collapsed"
+            )
+
+        with c4:
+            new_qty = st.number_input(
+                "Qty", min_value=0.0,
+                value=float(row.get("quantity", 0.0)),
+                step=1.0,
+                key=f"{key_prefix}_qty_{rid}",
+                label_visibility="collapsed"
+            )
+            row["quantity"] = new_qty
+
+        with c5:
+            row["unit"] = st.text_input(
+                "Unit", value=row.get("unit", "Meter"),
+                key=f"{key_prefix}_unit_{rid}",
+                label_visibility="collapsed"
+            )
+
+        with c6:
+            new_price = st.number_input(
+                "Price", min_value=0.0,
+                value=float(row.get("price_per_unit", 0.0)),
+                step=0.01, format="%.2f",
+                key=f"{key_prefix}_price_{rid}",
+                label_visibility="collapsed"
+            )
+            row["price_per_unit"] = new_price
+
+        with c7:
+            # Auto-calc amount = qty * price
+            auto_amt = float(row.get("quantity", 0.0)) * float(row.get("price_per_unit", 0.0))
+            row["amount"] = auto_amt
+            st.markdown(
+                f"<div style='padding:8px 4px; font-weight:700; "
+                f"color:#0b1220; font-size:13px;'>{auto_amt:,.2f}</div>",
+                unsafe_allow_html=True
+            )
+            if st.button("✖", key=f"{key_prefix}_rm_{rid}", help="Remove row"):
+                to_remove = idx
+
+    if to_remove is not None:
+        st.session_state[state_key].pop(to_remove)
+        st.rerun()
+
+    bc1, bc2 = st.columns([1, 5])
+    with bc1:
+        if st.button("+ Add Row", key=f"{key_prefix}_add"):
+            st.session_state[counter_key] += 1
+            st.session_state[state_key].append({
+                "id": st.session_state[counter_key],
+                "item_id": "(none)", "description": "",
+                "quantity": 0.0, "unit": "Meter",
+                "price_per_unit": 0.0, "amount": 0.0
+            })
+            st.rerun()
+
+    return st.session_state[state_key]
+
+
 def reset_challan_rows(key_prefix):
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
@@ -946,107 +1379,89 @@ def reset_challan_rows(key_prefix):
     st.session_state[counter_key] = 1
 
 
+def reset_invoice_rows(key_prefix):
+    state_key = f"{key_prefix}_rows"
+    counter_key = f"{key_prefix}_counter"
+    st.session_state[state_key] = [
+        {"id": 1, "item_id": "(none)", "description": "",
+         "quantity": 0.0, "unit": "Meter",
+         "price_per_unit": 0.0, "amount": 0.0}
+    ]
+    st.session_state[counter_key] = 1
+
+
 # =========================================================
 # UNIVERSAL BULK IMPORT
 # =========================================================
 
 IMPORT_TARGETS = {
     "Item Registration": {
-        "table": ITEM_TABLE,
-        "columns": list(ITEM_COLUMNS),
-        "auto_id_col": "Item_ID",
-        "auto_id_prefix": "ITM",
-        "has_auto_id": True,
+        "table": ITEM_TABLE, "columns": list(ITEM_COLUMNS),
+        "auto_id_col": "Item_ID", "auto_id_prefix": "ITM", "has_auto_id": True,
     },
     "Production": {
-        "table": PRODUCTION_TABLE,
-        "columns": list(PRODUCTION_COLUMNS),
-        "auto_id_col": "Production_ID",
-        "auto_id_prefix": "PRD",
-        "has_auto_id": True,
+        "table": PRODUCTION_TABLE, "columns": list(PRODUCTION_COLUMNS),
+        "auto_id_col": "Production_ID", "auto_id_prefix": "PRD", "has_auto_id": True,
     },
     "Opening Stock": {
-        "table": OPENING_TABLE,
-        "columns": list(OPENING_COLUMNS),
-        "auto_id_col": "Opening_Stock_ID",
-        "auto_id_prefix": "OPN",
-        "has_auto_id": True,
+        "table": OPENING_TABLE, "columns": list(OPENING_COLUMNS),
+        "auto_id_col": "Opening_Stock_ID", "auto_id_prefix": "OPN", "has_auto_id": True,
     },
     "Production Qty": {
-        "table": PRODUCTION_QTY_TABLE,
-        "columns": list(PRODUCTION_QTY_COLUMNS),
-        "auto_id_col": "Production_ID",
-        "auto_id_prefix": "PQT",
-        "has_auto_id": True,
+        "table": PRODUCTION_QTY_TABLE, "columns": list(PRODUCTION_QTY_COLUMNS),
+        "auto_id_col": "Production_ID", "auto_id_prefix": "PQT", "has_auto_id": True,
     },
     "Dispatch Qty": {
-        "table": DISPATCH_TABLE,
-        "columns": list(DISPATCH_COLUMNS),
-        "auto_id_col": "Dispatch_ID",
-        "auto_id_prefix": "DSP",
-        "has_auto_id": True,
+        "table": DISPATCH_TABLE, "columns": list(DISPATCH_COLUMNS),
+        "auto_id_col": "Dispatch_ID", "auto_id_prefix": "DSP", "has_auto_id": True,
     },
     "Return Qty": {
-        "table": RETURN_TABLE,
-        "columns": list(RETURN_COLUMNS),
-        "auto_id_col": "Return_ID",
-        "auto_id_prefix": "RET",
-        "has_auto_id": True,
+        "table": RETURN_TABLE, "columns": list(RETURN_COLUMNS),
+        "auto_id_col": "Return_ID", "auto_id_prefix": "RET", "has_auto_id": True,
     },
     "Closing Stock": {
-        "table": CLOSING_TABLE,
-        "columns": list(CLOSING_COLUMNS),
-        "auto_id_col": "Closing_Stock_ID",
-        "auto_id_prefix": "CLS",
-        "has_auto_id": True,
+        "table": CLOSING_TABLE, "columns": list(CLOSING_COLUMNS),
+        "auto_id_col": "Closing_Stock_ID", "auto_id_prefix": "CLS", "has_auto_id": True,
     },
     "Stock Adjustment": {
-        "table": ADJUSTMENT_TABLE,
-        "columns": list(ADJUSTMENT_COLUMNS),
-        "auto_id_col": "Adjustment_ID",
-        "auto_id_prefix": "ADJ",
-        "has_auto_id": True,
+        "table": ADJUSTMENT_TABLE, "columns": list(ADJUSTMENT_COLUMNS),
+        "auto_id_col": "Adjustment_ID", "auto_id_prefix": "ADJ", "has_auto_id": True,
     },
     "Delivery Challan": {
-        "table": CHALLAN_TABLE,
-        "columns": list(CHALLAN_COLUMNS),
-        "auto_id_col": "challan_id",
-        "auto_id_prefix": "",
-        "has_auto_id": False,
+        "table": CHALLAN_TABLE, "columns": list(CHALLAN_COLUMNS),
+        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False,
     },
     "Delivery Challan Items": {
-        "table": CHALLAN_ITEMS_TABLE,
-        "columns": list(CHALLAN_ITEMS_COLUMNS),
-        "auto_id_col": "challan_item_id",
-        "auto_id_prefix": "",
-        "has_auto_id": False,
+        "table": CHALLAN_ITEMS_TABLE, "columns": list(CHALLAN_ITEMS_COLUMNS),
+        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False,
     },
     "Return Challan": {
-        "table": RETURN_CHALLAN_TABLE,
-        "columns": list(RETURN_CHALLAN_COLUMNS),
-        "auto_id_col": "challan_id",
-        "auto_id_prefix": "",
-        "has_auto_id": False,
+        "table": RETURN_CHALLAN_TABLE, "columns": list(RETURN_CHALLAN_COLUMNS),
+        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False,
     },
     "Return Challan Items": {
         "table": RETURN_CHALLAN_ITEMS_TABLE,
         "columns": list(RETURN_CHALLAN_ITEMS_COLUMNS),
-        "auto_id_col": "challan_item_id",
-        "auto_id_prefix": "",
-        "has_auto_id": False,
+        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False,
+    },
+    "Invoice": {
+        "table": INVOICE_TABLE, "columns": list(INVOICE_COLUMNS),
+        "auto_id_col": "invoice_id", "auto_id_prefix": "", "has_auto_id": False,
+    },
+    "Invoice Items": {
+        "table": INVOICE_ITEMS_TABLE, "columns": list(INVOICE_ITEMS_COLUMNS),
+        "auto_id_col": "invoice_item_id", "auto_id_prefix": "", "has_auto_id": False,
     },
 }
 
 NUMERIC_TARGETS = {
     "Production": ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"],
-    "Opening Stock": ["Qty"],
-    "Production Qty": ["Qty"],
-    "Dispatch Qty": ["Qty"],
-    "Return Qty": ["Qty"],
-    "Closing Stock": ["Qty"],
-    "Stock Adjustment": ["Qty"],
+    "Opening Stock": ["Qty"], "Production Qty": ["Qty"], "Dispatch Qty": ["Qty"],
+    "Return Qty": ["Qty"], "Closing Stock": ["Qty"], "Stock Adjustment": ["Qty"],
     "Delivery Challan Items": ["quantity", "sr_no"],
     "Return Challan Items": ["quantity", "sr_no"],
+    "Invoice": ["cartage", "amount_received", "current_bill_amt", "outstanding"],
+    "Invoice Items": ["quantity", "price_per_unit", "amount", "sr_no"],
 }
 
 
@@ -1087,12 +1502,10 @@ def bulk_import_page():
         return
 
     st.success(f"CSV loaded: **{len(df)} rows**")
-
     st.markdown("#### 3. Preview")
     st.dataframe(df.head(20), use_container_width=True)
 
     st.markdown("#### 4. Options")
-
     start_num = 1
     if has_auto_id:
         c1, c2 = st.columns(2)
@@ -1100,7 +1513,7 @@ def bulk_import_page():
             start_num = st.number_input(
                 f"Start numbering for {auto_id_col} from",
                 min_value=1, value=1, step=1,
-                help=f"e.g. 1 → {auto_id_prefix}-001, 100 → {auto_id_prefix}-100"
+                help=f"e.g. 1 → {auto_id_prefix}-001"
             )
         with c2:
             st.info(f"New IDs: `{auto_id_prefix}-{int(start_num):03d}`, "
@@ -1117,7 +1530,6 @@ def bulk_import_page():
     payloads = []
     for idx, row in df.reset_index(drop=True).iterrows():
         record = {}
-
         if has_auto_id:
             record[auto_id_col] = f"{auto_id_prefix}-{int(start_num) + idx:03d}"
 
@@ -1144,8 +1556,7 @@ def bulk_import_page():
     st.markdown("#### 6. Insert")
 
     if st.button(f"Insert All Records into `{target_table}`",
-                 type="primary",
-                 key=f"bulk_insert_{target_name}"):
+                 type="primary", key=f"bulk_insert_{target_name}"):
         progress = st.progress(0)
         status = st.empty()
 
@@ -1229,6 +1640,7 @@ with st.sidebar:
             "Physical Check",
             "Delivery Challan",
             "Return Challan",
+            "Invoice",
             "Analytics",
             "Custom Charts",
             "Data Management"
@@ -1244,6 +1656,7 @@ st.markdown(
     "<div class='page-kicker'>FLEX HEAD INDUSTRIES PVT LTD</div>",
     unsafe_allow_html=True
 )
+
 
 
 # =========================================================
@@ -2544,6 +2957,463 @@ elif page == "Return Challan":
                         st.code(str(e))
 
 
+elif page == "Invoice":
+    st.title("Invoice")
+
+    if invoices_err:
+        st.error(f"Failed to load Invoice: {invoices_err}")
+    if invoice_items_err:
+        st.error(f"Failed to load Invoice_Items: {invoice_items_err}")
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "View / Print", "Create", "Update / Delete", "Manage Items"
+    ])
+
+    with tab1:
+        if invoices.empty:
+            st.info("No invoices yet.")
+        else:
+            c1, c2, c3 = st.columns([2, 1, 1])
+            with c1:
+                search_inv = st.text_input("Search",
+                    placeholder="Invoice No, Customer, DC No...",
+                    key="search_inv")
+            with c2:
+                sort_by_inv = st.selectbox("Sort by",
+                    ["Invoice Date", "Invoice ID", "Invoice No"],
+                    key="sortby_inv")
+            with c3:
+                sort_ord_inv = st.selectbox("Order",
+                    ["Newest first", "Oldest first"],
+                    key="sortorder_inv")
+
+            display_inv = invoices.copy()
+            if search_inv:
+                display_inv = filter_df(display_inv, search_inv)
+
+            sort_col_inv = None
+            if sort_by_inv == "Invoice Date":
+                sort_col_inv = "invoice_date"
+            elif sort_by_inv == "Invoice ID":
+                sort_col_inv = "invoice_id"
+            elif sort_by_inv == "Invoice No":
+                sort_col_inv = "invoice_no"
+
+            if sort_col_inv and sort_col_inv in display_inv.columns:
+                try:
+                    if sort_col_inv == "invoice_date":
+                        display_inv[sort_col_inv] = pd.to_datetime(
+                            display_inv[sort_col_inv], errors="coerce")
+                    display_inv = display_inv.sort_values(
+                        by=sort_col_inv,
+                        ascending=(sort_ord_inv == "Oldest first"),
+                        na_position="last")
+                except Exception:
+                    pass
+
+            if display_inv.empty:
+                st.warning("No invoices match the search.")
+            else:
+                left_col, right_col = st.columns([1, 1.6])
+
+                with left_col:
+                    st.markdown(f"#### {len(display_inv)} Invoice(s)")
+
+                    options_display = []
+                    id_map = {}
+                    for _, row in display_inv.iterrows():
+                        no = str(row.get("invoice_no", ""))
+                        d = fmt_date_only(row.get("invoice_date", ""))
+                        cid = row.get("invoice_id")
+                        label = f"{no}  •  {d}"
+                        options_display.append(label)
+                        id_map[label] = cid
+
+                    picked_label = st.radio("Invoices",
+                        options_display, key="pick_inv",
+                        label_visibility="collapsed")
+                    picked_id = id_map.get(picked_label)
+
+                    picked_row = display_inv.loc[
+                        display_inv["invoice_id"] == picked_id
+                    ].iloc[0]
+
+                    items_for = invoice_items[
+                        invoice_items["invoice_id"] == picked_id
+                    ].sort_values("sr_no")
+
+                    dc_no = ""
+                    try:
+                        if pd.notna(picked_row.get("dc_id")) and not challans.empty:
+                            m = challans[challans["challan_id"] == int(picked_row["dc_id"])]
+                            if not m.empty:
+                                dc_no = str(m.iloc[0].get("challan_no", ""))
+                    except Exception:
+                        pass
+
+                    st.markdown("---")
+                    st.markdown(
+                        f"**Invoice No:** {picked_row.get('invoice_no', '')}  \n"
+                        f"**Date:** {fmt_date_only(picked_row.get('invoice_date', ''))}  \n"
+                        f"**Customer:** {picked_row.get('customer_name', '')}  \n"
+                        f"**Contact:** {picked_row.get('contact_detail', '')}  \n"
+                        f"**DC No:** {dc_no}  \n"
+                        f"**Sales Head:** {picked_row.get('sales_head', '')}  \n"
+                        f"**Items:** {len(items_for)}  \n"
+                        f"**Current Bill:** Rs. {float(picked_row.get('current_bill_amt', 0) or 0):,.2f}"
+                    )
+
+                with right_col:
+                    st.markdown("#### Print / Download")
+                    html = build_invoice_html(picked_row, items_for)
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        printable = build_printable_html_page(html)
+                        st.download_button("PDF (Print)",
+                            data=printable.encode("utf-8"),
+                            file_name=f"{picked_row.get('invoice_no', 'inv')}_print.html",
+                            mime="text/html",
+                            use_container_width=True, key="pdf_inv")
+                    with c2:
+                        st.download_button("HTML",
+                            data=html.encode("utf-8"),
+                            file_name=f"{picked_row.get('invoice_no', 'inv')}.html",
+                            mime="text/html",
+                            use_container_width=True, key="html_inv")
+
+                    if not items_for.empty:
+                        st.download_button("CSV (Items)",
+                            data=items_for.to_csv(index=False).encode("utf-8"),
+                            file_name=f"{picked_row.get('invoice_no', 'inv')}_items.csv",
+                            mime="text/csv",
+                            use_container_width=True, key="csv_inv")
+                        st.markdown("#### Items")
+                        st.dataframe(items_for[
+                            ["sr_no", "item_id", "description", "quantity",
+                             "unit", "price_per_unit", "amount"]
+                        ], use_container_width=True, hide_index=True)
+
+    with tab2:
+        next_no_inv = next_invoice_no(invoices)
+        st.info(f"Next Invoice No: {next_no_inv}")
+
+        st.markdown("#### Invoice Details")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            inv_date = st.date_input("Invoice Date", value=date.today(), key="inv_date")
+            inv_customer = st.text_input("Customer Name", key="inv_cn")
+            inv_contact = st.text_input("Contact Detail", key="inv_cd")
+        with c2:
+            inv_sales_head = st.text_input("Sales Head", key="inv_sh")
+            # DC dropdown
+            dc_opts = get_dc_options(challans)
+            dc_labels = ["(none)"] + [o[0] for o in dc_opts]
+            dc_sel = st.selectbox("DC ID (from Delivery Challan)",
+                                   dc_labels, key="inv_dc")
+            inv_dc_id = None
+            if dc_sel != "(none)":
+                for label, cid in dc_opts:
+                    if label == dc_sel:
+                        inv_dc_id = cid
+                        break
+            inv_bank = st.text_input("Bank", key="inv_bank")
+        with c3:
+            inv_pay_mode = st.selectbox("Payment Mode", PAYMENT_MODES,
+                                         key="inv_pay")
+            inv_cartage = st.number_input("Cartage", min_value=0.0, value=0.0,
+                                           step=0.01, format="%.2f",
+                                           key="inv_cart")
+            inv_amt_recv = st.number_input("Amount Received", min_value=0.0,
+                                            value=0.0, step=0.01,
+                                            format="%.2f", key="inv_amt_recv")
+            inv_outstanding = st.number_input("Outstanding", min_value=0.0,
+                                               value=0.0, step=0.01,
+                                               format="%.2f", key="inv_out")
+        inv_remarks = st.text_area("Remarks", height=70, key="inv_remarks")
+
+        st.markdown("---")
+        st.markdown("#### Items")
+        item_rows_inv = invoice_items_editor("create_inv")
+
+        # Auto-calc current bill
+        items_total = sum(
+            float(r.get("quantity", 0)) * float(r.get("price_per_unit", 0))
+            for r in item_rows_inv
+        )
+        auto_bill = items_total + float(inv_cartage)
+        st.info(f"**Items Total:** Rs. {items_total:,.2f}  |  "
+                f"**Cartage:** Rs. {float(inv_cartage):,.2f}  |  "
+                f"**Auto Bill Amount:** Rs. {auto_bill:,.2f}")
+
+        st.markdown("---")
+        if st.button("Create Invoice", type="primary", key="create_btn_inv"):
+            if not inv_customer.strip():
+                st.error("Customer Name required.")
+            else:
+                valid_inv = [r for r in item_rows_inv
+                             if r["description"].strip() and r["quantity"] > 0]
+                if not valid_inv:
+                    st.error("At least one valid item row required.")
+                else:
+                    try:
+                        hdr_inv = {
+                            "invoice_no": next_no_inv,
+                            "invoice_date": date_str(inv_date),
+                            "customer_name": inv_customer.strip(),
+                            "contact_detail": inv_contact.strip() or None,
+                            "dc_id": inv_dc_id,
+                            "sales_head": inv_sales_head.strip() or None,
+                            "bank": inv_bank.strip() or None,
+                            "payment_mode": inv_pay_mode,
+                            "cartage": float(inv_cartage),
+                            "amount_received": float(inv_amt_recv),
+                            "current_bill_amt": float(auto_bill),
+                            "outstanding": float(inv_outstanding),
+                            "remarks": inv_remarks.strip() or None,
+                        }
+                        resp_inv = supabase.table(INVOICE_TABLE).insert(hdr_inv).execute()
+                        if resp_inv.data:
+                            inv_id = resp_inv.data[0]["invoice_id"]
+                            payloads_inv = []
+                            for idx, r in enumerate(valid_inv, 1):
+                                amt = float(r["quantity"]) * float(r["price_per_unit"])
+                                payloads_inv.append({
+                                    "invoice_id": inv_id, "sr_no": idx,
+                                    "item_id": r["item_id"] if r["item_id"] != "(none)" else None,
+                                    "description": r["description"].strip(),
+                                    "quantity": r["quantity"],
+                                    "price_per_unit": r["price_per_unit"],
+                                    "amount": amt,
+                                    "unit": (r["unit"] or "Meter").strip()
+                                })
+                            supabase.table(INVOICE_ITEMS_TABLE).insert(payloads_inv).execute()
+                            st.success(f"Invoice {next_no_inv} created with {len(valid_inv)} item(s).")
+                            reset_invoice_rows("create_inv")
+                            refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
+
+    with tab3:
+        if invoices.empty:
+            st.info("No invoices.")
+        else:
+            sel_no_inv = st.selectbox("Select Invoice",
+                invoices["invoice_no"].astype(str).tolist(), key="upd_inv")
+            sel_row_inv = invoices.loc[
+                invoices["invoice_no"].astype(str) == sel_no_inv
+            ].iloc[0]
+            inv_id_edit = sel_row_inv["invoice_id"]
+
+            def _v_inv(col):
+                v = sel_row_inv.get(col)
+                return str(v) if pd.notna(v) else ""
+
+            with st.form("upd_inv_form"):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    d = date.today()
+                    if pd.notna(sel_row_inv["invoice_date"]):
+                        try:
+                            d = pd.to_datetime(sel_row_inv["invoice_date"]).date()
+                        except Exception:
+                            d = date.today()
+                    ed_inv = st.date_input("Invoice Date", value=d, key="ed_inv")
+                    ecn_inv = st.text_input("Customer Name", value=_v_inv("customer_name"), key="ecn_inv")
+                    ecdt_inv = st.text_input("Contact Detail", value=_v_inv("contact_detail"), key="ecdt_inv")
+                with c2:
+                    esh_inv = st.text_input("Sales Head", value=_v_inv("sales_head"), key="esh_inv")
+                    ebank_inv = st.text_input("Bank", value=_v_inv("bank"), key="ebank_inv")
+                    current_pay = _v_inv("payment_mode") or "Cash"
+                    pi = PAYMENT_MODES.index(current_pay) if current_pay in PAYMENT_MODES else 0
+                    epay_inv = st.selectbox("Payment Mode", PAYMENT_MODES, index=pi, key="epay_inv")
+                with c3:
+                    ecart_inv = st.number_input("Cartage", min_value=0.0,
+                        value=float(sel_row_inv.get("cartage", 0) or 0),
+                        step=0.01, format="%.2f", key="ecart_inv")
+                    eamt_inv = st.number_input("Amount Received", min_value=0.0,
+                        value=float(sel_row_inv.get("amount_received", 0) or 0),
+                        step=0.01, format="%.2f", key="eamt_inv")
+                    ebil_inv = st.number_input("Current Bill Amount", min_value=0.0,
+                        value=float(sel_row_inv.get("current_bill_amt", 0) or 0),
+                        step=0.01, format="%.2f", key="ebil_inv")
+                    eout_inv = st.number_input("Outstanding", min_value=0.0,
+                        value=float(sel_row_inv.get("outstanding", 0) or 0),
+                        step=0.01, format="%.2f", key="eout_inv")
+                erem_inv = st.text_area("Remarks", value=_v_inv("remarks"), height=70, key="erem_inv")
+                upd_inv = st.form_submit_button("Update Header", type="primary")
+
+            if upd_inv:
+                try:
+                    supabase.table(INVOICE_TABLE).update({
+                        "invoice_date": date_str(ed_inv),
+                        "customer_name": ecn_inv.strip(),
+                        "contact_detail": ecdt_inv.strip() or None,
+                        "sales_head": esh_inv.strip() or None,
+                        "bank": ebank_inv.strip() or None,
+                        "payment_mode": epay_inv,
+                        "cartage": float(ecart_inv),
+                        "amount_received": float(eamt_inv),
+                        "current_bill_amt": float(ebil_inv),
+                        "outstanding": float(eout_inv),
+                        "remarks": erem_inv.strip() or None,
+                    }).eq("invoice_id", inv_id_edit).execute()
+                    st.success("Updated.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Update failed.")
+                    st.code(str(e))
+
+            if st.button("Delete Invoice", type="secondary", key="del_inv"):
+                try:
+                    supabase.table(INVOICE_TABLE).delete().eq(
+                        "invoice_id", inv_id_edit).execute()
+                    st.success("Deleted.")
+                    refresh_all()
+                except Exception as e:
+                    st.error("Failed.")
+                    st.code(str(e))
+
+    with tab4:
+        if invoices.empty:
+            st.info("No invoices.")
+        else:
+            sel_no_inv2 = st.selectbox("Select Invoice",
+                invoices["invoice_no"].astype(str).tolist(), key="items_inv")
+            sel_row_inv2 = invoices.loc[
+                invoices["invoice_no"].astype(str) == sel_no_inv2
+            ].iloc[0]
+            inv_id_edit2 = sel_row_inv2["invoice_id"]
+
+            cur_inv = invoice_items[
+                invoice_items["invoice_id"] == inv_id_edit2
+            ].sort_values("sr_no")
+
+            st.markdown(f"#### Items for {sel_no_inv2}")
+            if cur_inv.empty:
+                st.info("No items.")
+                next_sr_inv = 1
+            else:
+                st.dataframe(cur_inv, use_container_width=True, hide_index=True)
+                next_sr_inv = int(cur_inv["sr_no"].max()) + 1
+
+            item_options_inv = get_item_options(items)
+            with st.form("add_item_inv_form"):
+                st.markdown("#### Add New Item")
+                c1, c2, c3, c4, c5, c6 = st.columns([2, 4, 1.5, 1.5, 1.5, 1.5])
+                with c1:
+                    if item_options_inv:
+                        ni_inv = st.selectbox("Item ID",
+                            ["(none)"] + item_options_inv, key="add_ci_inv")
+                    else:
+                        ni_inv = st.text_input("Item ID", key="add_cit_inv")
+                with c2:
+                    auto_desc_inv = auto_description(ni_inv) if ni_inv != "(none)" else ""
+                    nd_inv = st.text_input("Description", value=auto_desc_inv,
+                                            key=f"add_cd_inv_{ni_inv}")
+                with c3:
+                    nq_inv = st.number_input("Qty", min_value=0.0, value=0.0,
+                                              step=1.0, key="add_cq_inv")
+                with c4:
+                    nu_inv = st.text_input("Unit", value="Meter", key="add_cu_inv")
+                with c5:
+                    npr_inv = st.number_input("Price/Unit", min_value=0.0, value=0.0,
+                                               step=0.01, format="%.2f", key="add_cpr_inv")
+                with c6:
+                    nam_inv = st.number_input("Amount", min_value=0.0, value=0.0,
+                                               step=0.01, format="%.2f", key="add_cam_inv")
+                ad_inv = st.form_submit_button("Add", type="primary")
+
+            if ad_inv:
+                if not nd_inv.strip() or nq_inv <= 0:
+                    st.error("Desc + Qty required.")
+                else:
+                    try:
+                        amt_val = float(nam_inv) if nam_inv > 0 else float(nq_inv) * float(npr_inv)
+                        supabase.table(INVOICE_ITEMS_TABLE).insert({
+                            "invoice_id": inv_id_edit2, "sr_no": next_sr_inv,
+                            "item_id": ni_inv if ni_inv != "(none)" else None,
+                            "description": nd_inv.strip(),
+                            "quantity": nq_inv, "unit": nu_inv.strip() or "Meter",
+                            "price_per_unit": float(npr_inv),
+                            "amount": amt_val
+                        }).execute()
+                        st.success("Added.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
+
+            if not cur_inv.empty:
+                st.markdown("---")
+                st.markdown("#### Edit / Delete")
+                eid_inv = st.selectbox("Select Item",
+                    cur_inv["invoice_item_id"].astype(str).tolist(),
+                    key="edit_ci_sel_inv")
+                er_inv = cur_inv.loc[
+                    cur_inv["invoice_item_id"].astype(str) == eid_inv
+                ].iloc[0]
+
+                with st.form("edit_item_inv_form"):
+                    c1, c2, c3, c4, c5, c6 = st.columns([2, 4, 1.5, 1.5, 1.5, 1.5])
+                    with c1:
+                        ce_inv = str(er_inv["item_id"]) if pd.notna(er_inv["item_id"]) else "(none)"
+                        if item_options_inv:
+                            idx = item_options_inv.index(ce_inv) + 1 if ce_inv in item_options_inv else 0
+                            ei_inv = st.selectbox("Item ID",
+                                ["(none)"] + item_options_inv, index=idx,
+                                key="edit_ci_inv")
+                        else:
+                            ei_inv = st.text_input("Item ID", value=ce_inv, key="edit_cit_inv")
+                    with c2:
+                        ed_inv = st.text_input("Description",
+                            value=str(er_inv["description"]) if pd.notna(er_inv["description"]) else "",
+                            key="edit_cd_inv")
+                    with c3:
+                        eq_inv = st.number_input("Qty", min_value=0.0,
+                            value=float(er_inv["quantity"]) if pd.notna(er_inv["quantity"]) else 0.0,
+                            step=1.0, key="edit_cq_inv")
+                    with c4:
+                        eu_inv = st.text_input("Unit",
+                            value=str(er_inv["unit"]) if pd.notna(er_inv["unit"]) else "Meter",
+                            key="edit_cu_inv")
+                    with c5:
+                        epr_inv = st.number_input("Price/Unit", min_value=0.0,
+                            value=float(er_inv["price_per_unit"]) if pd.notna(er_inv["price_per_unit"]) else 0.0,
+                            step=0.01, format="%.2f", key="edit_cpr_inv")
+                    with c6:
+                        eam_inv = st.number_input("Amount", min_value=0.0,
+                            value=float(er_inv["amount"]) if pd.notna(er_inv["amount"]) else 0.0,
+                            step=0.01, format="%.2f", key="edit_cam_inv")
+                    sv_inv = st.form_submit_button("Save", type="primary")
+
+                if sv_inv:
+                    try:
+                        supabase.table(INVOICE_ITEMS_TABLE).update({
+                            "item_id": ei_inv if ei_inv != "(none)" else None,
+                            "description": ed_inv.strip(),
+                            "quantity": eq_inv,
+                            "unit": eu_inv.strip() or "Meter",
+                            "price_per_unit": float(epr_inv),
+                            "amount": float(eam_inv)
+                        }).eq("invoice_item_id", eid_inv).execute()
+                        st.success("Updated.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Update failed.")
+                        st.code(str(e))
+
+                if st.button("Delete Item", type="secondary", key="del_ci_inv"):
+                    try:
+                        supabase.table(INVOICE_ITEMS_TABLE).delete().eq(
+                            "invoice_item_id", eid_inv).execute()
+                        st.success("Deleted.")
+                        refresh_all()
+                    except Exception as e:
+                        st.error("Failed.")
+                        st.code(str(e))
+
+
 elif page == "Analytics":
     st.title("Analytics")
 
@@ -2571,6 +3441,8 @@ elif page == "Custom Charts":
         "Delivery Challan Items": challan_items,
         "Return Challan": return_challans,
         "Return Challan Items": return_challan_items,
+        "Invoice": invoices,
+        "Invoice Items": invoice_items,
     }
 
     src = st.selectbox("Select a dataset", list(sources.keys()))
@@ -2641,11 +3513,12 @@ elif page == "Custom Charts":
 elif page == "Data Management":
     st.title("Data Management")
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Items", len(items))
     c2.metric("Production", len(production))
     c3.metric("Delivery Challans", len(challans))
     c4.metric("Return Challans", len(return_challans))
+    c5.metric("Invoices", len(invoices))
 
     st.markdown("---")
 
@@ -2662,6 +3535,8 @@ elif page == "Data Management":
         ("Delivery Challan Items", challan_items),
         ("Return Challan", return_challans),
         ("Return Challan Items", return_challan_items),
+        ("Invoice", invoices),
+        ("Invoice Items", invoice_items),
     ]:
         st.subheader(label)
         st.dataframe(frame, use_container_width=True, hide_index=True)
