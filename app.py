@@ -3104,9 +3104,18 @@ elif page == "Analytics":
         c3.metric("Total Dispatched", f"{TOTALS['dispatched']:,.0f}")
         c4.metric("Total Closing", f"{TOTALS['closing']:,.0f}")
 
-        fig = px.bar(STOCK_LEDGER, x="Item_ID",
-                     y=["Opening", "Produced", "Dispatched",
-                        "Returned", "Adjusted", "Closing"],
+                # Ensure numeric columns (fix for mixed-type wide-form error)
+        ledger_chart = STOCK_LEDGER.copy()
+        numeric_ledger_cols = ["Opening", "Produced", "Dispatched",
+                                "Returned", "Adjusted", "Closing"]
+        for _c in numeric_ledger_cols:
+            if _c in ledger_chart.columns:
+                ledger_chart[_c] = pd.to_numeric(
+                    ledger_chart[_c], errors="coerce").fillna(0)
+        ledger_chart["Item_ID"] = ledger_chart["Item_ID"].astype(str)
+
+        fig = px.bar(ledger_chart, x="Item_ID",
+                     y=numeric_ledger_cols,
                      barmode="group", title="Stock Ledger by Item")
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
