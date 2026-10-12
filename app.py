@@ -1449,6 +1449,9 @@ def bulk_import_page():
 
     tab1, tab2 = st.tabs(["Import Data", "Download All Data"])
 
+    # =====================================================
+    # TAB 1: IMPORT DATA
+    # =====================================================
     with tab1:
         target_name = st.selectbox("Target Module",
                                     list(IMPORT_TARGETS.keys()),
@@ -1463,114 +1466,118 @@ def bulk_import_page():
 
         uploaded = st.file_uploader("Upload CSV", type=["csv"],
                                      key=f"csv_{target_name}")
+
         if uploaded is None:
             st.info("Upload a CSV file to continue.")
+        else:
+            try:
+                df = pd.read_csv(uploaded, dtype=str).fillna("")
+            except Exception as e:
+                st.error(f"Failed to read CSV: {e}")
+                df = None
 
-                 if uploaded is not None:
+            if df is not None and not df.empty:
+                st.success(f"Loaded {len(df)} rows")
 
-        try:
-            df = pd.read_csv(uploaded, dtype=str).fillna("")
-        except Exception as e:
-            st.error(f"Failed to read CSV: {e}")
-            return
+                with st.expander("Preview", expanded=False):
+                    st.dataframe(df.head(20), use_container_width=True)
 
-        st.success(f"Loaded {len(df)} rows")
+                csv_cols = [c for c in all_cols if c in df.columns]
+                missing_csv_cols = [c for c in all_cols if c not in df.columns]
 
-        with st.expander("Preview", expanded=False):
-            st.dataframe(df.head(20), use_container_width=True)
-
-        csv_cols = [c for c in all_cols if c in df.columns]
-        missing_csv_cols = [c for c in all_cols if c not in df.columns]
-
-        selected_cols = st.multiselect(
-            "Columns to Import", options=csv_cols,
-            default=csv_cols, key=f"colsel_{target_name}"
-        )
-
-        if not selected_cols:
-            st.warning("Select at least one column.")
-            return
-
-        if missing_csv_cols:
-            st.caption(f"Not in CSV: {', '.join(missing_csv_cols)}")
-
-        start_num = 1
-        if has_auto_id:
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                start_num = st.number_input(
-                    f"Start {auto_id_col} from",
-                    min_value=1, value=1, step=1,
-                    key=f"start_{target_name}"
+                selected_cols = st.multiselect(
+                    "Columns to Import",
+                    options=csv_cols,
+                    default=csv_cols,
+                    key=f"colsel_{target_name}"
                 )
-            with c2:
-                st.info(f"IDs start at `{auto_id_prefix}-{int(start_num):03d}`")
 
-        def _clean(v):
-            if v is None:
-                return ""
-            s = str(v).strip()
-            if s.lower() in ("nan", "none", "null"):
-                return ""
-            return s
+                if not selected_cols:
+                    st.warning("Select at least one column.")
+                else:
+                    if missing_csv_cols:
+                        st.caption(f"Not in CSV: {', '.join(missing_csv_cols)}")
 
-        payloads = []
-        for idx, row in df.reset_index(drop=True).iterrows():
-            record = {}
-            if has_auto_id:
-                record[auto_id_col] = f"{auto_id_prefix}-{int(start_num) + idx:03d}"
-            for col in selected_cols:
-                if col == auto_id_col and has_auto_id:
-                    continue
-                val = _clean(row.get(col, ""))
-                if col in NUMERIC_TARGETS.get(target_name, []):
-                    try:
-                        val = float(val) if val != "" else 0.0
-                    except Exception:
-                        val = 0.0
-                record[col] = val if val != "" else None
-            payloads.append(record)
+                    start_num = 1
+                    if has_auto_id:
+                        c1, c2 = st.columns([1, 2])
+                        with c1:
+                            start_num = st.number_input(
+                                f"Start {auto_id_col} from",
+                                min_value=1, value=1, step=1,
+                                key=f"start_{target_name}"
+                            )
+                        with c2:
+                            st.info(f"IDs start at `{auto_id_prefix}-{int(start_num):03d}`")
 
-        if st.button(f"Insert {len(payloads)} Records",
-                     type="primary", key=f"bulk_insert_{target_name}"):
-            progress = st.progress(0)
-            status = st.empty()
-            total = len(payloads)
-            inserted = 0
-            failed = 0
-            errors_list = []
+                    def _clean(v):
+                        if v is None:
+                            return ""
+                        s = str(v).strip()
+                        if s.lower() in ("nan", "none", "null"):
+                            return ""
+                        return s
 
-            BATCH = 50
-            for i in range(0, total, BATCH):
-                batch = payloads[i:i + BATCH]
-                try:
-                    supabase.table(target_table).insert(batch).execute()
-                    inserted += len(batch)
-                    status.text(f"Inserted {inserted}/{total}")
-                    progress.progress(min(inserted / total, 1.0))
-                except Exception:
-                    for p in batch:
-                        try:
-                            supabase.table(target_table).insert(p).execute()
-                            inserted += 1
-                        except Exception as ee:
-                            failed += 1
-                            id_val = p.get(auto_id_col, "?")
-                            errors_list.append(f"{id_val}: {str(ee)[:120]}")
-                    status.text(f"Inserted {inserted}/{total}")
-                    progress.progress(min((i + len(batch)) / total, 1.0))
+                    payloads = []
+                    for idx, row in df.reset_index(drop=True).iterrows():
+                        record = {}
+                        if has_auto_id:
+                            record[auto_id_col] = f"{auto_id_prefix}-{int(start_num) + idx:03d}"
+                        for col in selected_cols:
+                            if col == auto_id_col and has_auto_id:
+                                continue
+                            val = _clean(row.get(col, ""))
+                            if col in NUMERIC_TARGETS.get(target_name, []):
+                                try:
+                                    val = float(val) if val != "" else 0.0
+                                except Exception:
+                                    val = 0.0
+                            record[col] = val if val != "" else None
+                        payloads.append(record)
 
-            progress.progress(1.0)
-            if failed == 0:
-                st.success(f"Inserted {inserted} records.")
-            else:
-                st.warning(f"Inserted: {inserted} | Failed: {failed}")
-            if errors_list:
-                with st.expander(f"{len(errors_list)} error(s)"):
-                    for e in errors_list[:30]:
-                        st.code(e)
-            refresh_all()
+                    if st.button(f"Insert {len(payloads)} Records",
+                                 type="primary", key=f"bulk_insert_{target_name}"):
+                        progress = st.progress(0)
+                        status = st.empty()
+                        total = len(payloads)
+                        inserted = 0
+                        failed = 0
+                        errors_list = []
 
+                        BATCH = 50
+                        for i in range(0, total, BATCH):
+                            batch = payloads[i:i + BATCH]
+                            try:
+                                supabase.table(target_table).insert(batch).execute()
+                                inserted += len(batch)
+                                status.text(f"Inserted {inserted}/{total}")
+                                progress.progress(min(inserted / total, 1.0))
+                            except Exception:
+                                for p in batch:
+                                    try:
+                                        supabase.table(target_table).insert(p).execute()
+                                        inserted += 1
+                                    except Exception as ee:
+                                        failed += 1
+                                        id_val = p.get(auto_id_col, "?")
+                                        errors_list.append(f"{id_val}: {str(ee)[:120]}")
+                                status.text(f"Inserted {inserted}/{total}")
+                                progress.progress(min((i + len(batch)) / total, 1.0))
+
+                        progress.progress(1.0)
+                        if failed == 0:
+                            st.success(f"Inserted {inserted} records.")
+                        else:
+                            st.warning(f"Inserted: {inserted} | Failed: {failed}")
+                        if errors_list:
+                            with st.expander(f"{len(errors_list)} error(s)"):
+                                for e in errors_list[:30]:
+                                    st.code(e)
+                        refresh_all()
+
+    # =====================================================
+    # TAB 2: DOWNLOAD ALL DATA
+    # =====================================================
     with tab2:
         st.markdown("#### All Module Data Export")
 
@@ -1798,6 +1805,7 @@ if page == "Executive Dashboard":
         if not production.empty:
             sdf = (production["Production_Status"].fillna("Unknown")
                    .value_counts().rename_axis("Status").reset_index(name="Count"))
+            sdf["Status"] = sdf["Status"].astype(str)
             fig = px.pie(sdf, names="Status", values="Count", hole=0.5)
             st.plotly_chart(fig, use_container_width=True)
         else:
@@ -3334,7 +3342,6 @@ elif page == "Custom Charts":
         cb = st.selectbox("Color / Group by", ["(none)"] + all_cols)
 
     try:
-        # Ensure numeric
         df_chart[x] = df_chart[x].astype(str)
         if y in df_chart.columns:
             df_chart[y] = pd.to_numeric(df_chart[y], errors="coerce").fillna(0)
