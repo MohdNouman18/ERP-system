@@ -43,8 +43,8 @@ PRODUCTION_COLUMNS = (
 )
 OPENING_COLUMNS = ("Opening_Stock_ID", "Item_ID", "Qty", "Entry_Date")
 PRODUCTION_QTY_COLUMNS = ("Production_ID", "Item_ID", "Qty", "Entry_Date")
-DISPATCH_COLUMNS = ("Dispatch_ID", "Item_ID", "Qty", "Entry_Date")
-RETURN_COLUMNS = ("Return_ID", "Item_ID", "Qty", "Entry_Date")
+DISPATCH_COLUMNS = ("Dispatch_ID", "Item_ID", "Qty", "Entry_Date", "Reference")
+RETURN_COLUMNS = ("Return_ID", "Item_ID", "Qty", "Entry_Date", "Reference")
 CLOSING_COLUMNS = ("Closing_Stock_ID", "Item_ID", "Qty", "Entry_Date")
 ADJUSTMENT_COLUMNS = (
     "Adjustment_ID", "Item_ID", "Adjustment_Date",
@@ -285,17 +285,12 @@ def load_all_data():
 
 
 # =========================================================
-# ITEM LOOKUP — 4 attributes only
+# ITEM LOOKUP — 4 attributes
 # Format: Material_Grade - Nominal_Diameter_mm - SDR - Color
 # =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def build_item_lookup(items_df):
-    """
-    Item_ID -> description string.
-    ONLY 4 attributes: Material_Grade - Nominal_Diameter_mm - SDR - Color
-    Empty attributes are skipped.
-    """
     if items_df.empty:
         return {}
     lookup = {}
@@ -389,6 +384,113 @@ def next_invoice_no(df):
     if not nums:
         return f"{prefix}001"
     return f"{prefix}{max(nums) + 1:03d}"
+
+
+# =========================================================
+# AUTO-PUSH helpers — challan → stock
+# =========================================================
+
+def auto_push_dispatch(challan_no, items_list, challan_date):
+    """
+    Insert each item into Dispatch_Qty with Reference = challan_no.
+    Returns (inserted_count, errors_list).
+    """
+    if not items_list:
+        return 0, []
+
+    try:
+        resp = supabase.table(DISPATCH_TABLE).select("*").execute()
+        current_df = make_df(resp.data or [], DISPATCH_COLUMNS)
+    except Exception:
+        current_df = dispatch.copy()
+
+    inserted = 0
+    errors = []
+
+    for item in items_list:
+        item_id = item.get("item_id")
+        qty = float(item.get("quantity", 0) or 0)
+        if not item_id or item_id == "(none)" or qty <= 0:
+            continue
+
+        new_id = get_next_id(current_df, "Dispatch_ID", "DSP")
+        payload = {
+            "Dispatch_ID": new_id,
+            "Item_ID": item_id,
+            "Qty": qty,
+            "Entry_Date": challan_date,
+            "Reference": challan_no,
+        }
+        try:
+            supabase.table(DISPATCH_TABLE).insert(payload).execute()
+            current_df = pd.concat(
+                [current_df, pd.DataFrame([payload])], ignore_index=True
+            )
+            inserted += 1
+        except Exception as e:
+            errors.append(f"{item_id}: {str(e)[:120]}")
+
+    return inserted, errors
+
+
+def auto_push_return(challan_no, items_list, challan_date):
+    """
+    Insert each item into Return_Qty with Reference = challan_no.
+    """
+    if not items_list:
+        return 0, []
+
+    try:
+        resp = supabase.table(RETURN_TABLE).select("*").execute()
+        current_df = make_df(resp.data or [], RETURN_COLUMNS)
+    except Exception:
+        current_df = return_qty.copy()
+
+    inserted = 0
+    errors = []
+
+    for item in items_list:
+        item_id = item.get("item_id")
+        qty = float(item.get("quantity", 0) or 0)
+        if not item_id or item_id == "(none)" or qty <= 0:
+            continue
+
+        new_id = get_next_id(current_df, "Return_ID", "RET")
+        payload = {
+            "Return_ID": new_id,
+            "Item_ID": item_id,
+            "Qty": qty,
+            "Entry_Date": challan_date,
+            "Reference": challan_no,
+        }
+        try:
+            supabase.table(RETURN_TABLE).insert(payload).execute()
+            current_df = pd.concat(
+                [current_df, pd.DataFrame([payload])], ignore_index=True
+            )
+            inserted += 1
+        except Exception as e:
+            errors.append(f"{item_id}: {str(e)[:120]}")
+
+    return inserted, errors
+
+
+def delete_dispatch_by_reference(challan_no):
+    """Delete all Dispatch_Qty rows with this Reference."""
+    try:
+        supabase.table(DISPATCH_TABLE).delete().eq("Reference", challan_no).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
+def delete_return_by_reference(challan_no):
+    """Delete all Return_Qty rows with this Reference."""
+    try:
+        supabase.table(RETURN_TABLE).delete().eq("Reference", challan_no).execute()
+        return True, None
+    except Exception as e:
+        return False, str(e)
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -1038,12 +1140,17 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
 
             if submit:
                 try:
-                    supabase.table(table_name).insert({
+                    payload = {
                         id_col: next_id,
                         "Item_ID": selected_item,
                         "Qty": qty,
                         "Entry_Date": date_str(entry_date)
-                    }).execute()
+                    }
+                    if table_name == DISPATCH_TABLE:
+                        payload["Reference"] = "MANUAL"
+                    if table_name == RETURN_TABLE:
+                        payload["Reference"] = "MANUAL"
+                    supabase.table(table_name).insert(payload).execute()
                     st.success(f"{label} {next_id} added.")
                     refresh_all()
                 except Exception as e:
@@ -1122,7 +1229,6 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
 # =========================================================
 
 def challan_items_editor(key_prefix):
-    """Auto-fill description: Material - Diameter - SDR - Color"""
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -1185,7 +1291,6 @@ def challan_items_editor(key_prefix):
                 )
 
         with c3:
-            # DYNAMIC KEY: changes when item_id changes → forces refresh
             current_item = row.get("item_id", "(none)")
             default_desc = row.get("description", "") or auto_description(current_item)
             row["description"] = st.text_input(
@@ -1236,10 +1341,6 @@ def challan_items_editor(key_prefix):
 
     return st.session_state[state_key]
 
-
-# =========================================================
-# INVOICE ITEMS EDITOR — AUTO-FILL DESCRIPTION + AUTO AMOUNT
-# =========================================================
 
 def invoice_items_editor(key_prefix):
     state_key = f"{key_prefix}_rows"
@@ -1900,6 +2001,7 @@ elif page == "Production":
 
 elif page == "Stock Control":
     st.title("Stock Control")
+    st.caption("Dispatch and Return are auto-managed by Delivery/Return Challans.")
     stock_tabs = st.tabs(["Opening Stock", "Production Qty", "Dispatch Qty",
                           "Return Qty", "Closing Stock"])
     with stock_tabs[0]:
@@ -1909,9 +2011,13 @@ elif page == "Stock Control":
         crud_stock_table(PRODUCTION_QTY_TABLE, prod_qty, "Production_ID",
                          "Production Qty", items, prod_qty_err)
     with stock_tabs[2]:
+        st.markdown("### Dispatch Qty")
+        st.caption("⚠️ Auto-managed by Delivery Challans. Manual entries will show `Reference = MANUAL`.")
         crud_stock_table(DISPATCH_TABLE, dispatch, "Dispatch_ID",
                          "Dispatch Qty", items, dispatch_err)
     with stock_tabs[3]:
+        st.markdown("### Return Qty")
+        st.caption("⚠️ Auto-managed by Return Challans. Manual entries will show `Reference = MANUAL`.")
         crud_stock_table(RETURN_TABLE, return_qty, "Return_ID",
                          "Return Qty", items, return_err)
     with stock_tabs[4]:
@@ -2112,6 +2218,7 @@ elif page == "Physical Check":
 
 elif page == "Delivery Challan":
     st.title("Delivery Challan")
+    st.caption("Creating a challan will automatically deduct stock from Dispatch_Qty.")
     if challans_err:
         st.error(f"Failed to load Delivery_Challan: {challans_err}")
     if challan_items_err:
@@ -2219,6 +2326,8 @@ elif page == "Delivery Challan":
     with tab2:
         next_no_dc = next_challan_no(challans, "DC")
         st.info(f"Next Challan No: {next_no_dc}")
+        st.warning("⚠️ On save, each item's quantity will be **auto-deducted** from Dispatch_Qty (stock).")
+
         st.markdown("#### Customer Details")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -2276,7 +2385,18 @@ elif page == "Delivery Challan":
                                     "unit": (r["unit"] or "Meter").strip()
                                 })
                             supabase.table(CHALLAN_ITEMS_TABLE).insert(payloads_dc).execute()
+
+                            disp_ok, disp_errs = auto_push_dispatch(
+                                next_no_dc, valid_dc, date_str(cd_dc)
+                            )
+
                             st.success(f"Challan {next_no_dc} created with {len(valid_dc)} item(s).")
+                            if disp_ok > 0:
+                                st.info(f"✅ {disp_ok} item(s) auto-deducted from stock (Dispatch_Qty).")
+                            if disp_errs:
+                                st.warning(f"⚠️ {len(disp_errs)} item(s) could not update stock:")
+                                for e in disp_errs[:5]:
+                                    st.code(e)
                             reset_challan_rows("create_dc")
                             refresh_all()
                     except Exception as e:
@@ -2340,11 +2460,18 @@ elif page == "Delivery Challan":
                     st.error("Update failed.")
                     st.code(str(e))
 
-            if st.button("Delete Challan", type="secondary", key="del_dc"):
+            st.markdown("---")
+            st.warning("⚠️ Deleting a challan will also remove its auto-created Dispatch_Qty entries.")
+            if st.button("Delete Challan (+ Reverse Stock)", type="secondary", key="del_dc"):
                 try:
+                    # Reverse auto-pushed dispatch entries
+                    rev_ok, rev_err = delete_dispatch_by_reference(sel_no_dc)
+                    # Delete challan (cascade deletes items)
                     supabase.table(CHALLAN_TABLE).delete().eq(
                         "challan_id", cid_dc2).execute()
-                    st.success("Deleted.")
+                    st.success("Challan deleted and stock reversed.")
+                    if not rev_ok:
+                        st.warning(f"Note: Could not reverse dispatch entries: {rev_err}")
                     refresh_all()
                 except Exception as e:
                     st.error("Failed.")
@@ -2364,6 +2491,7 @@ elif page == "Delivery Challan":
                 challan_items["challan_id"] == cid_dc3].sort_values("sr_no")
 
             st.markdown(f"#### Items for {sel_no_dc2}")
+            st.caption("ℹ️ Editing items here will NOT auto-adjust Dispatch_Qty. Use delete + recreate for stock changes.")
             if cur_dc.empty:
                 st.info("No items.")
                 next_sr_dc = 1
@@ -2470,6 +2598,7 @@ elif page == "Delivery Challan":
 
 elif page == "Return Challan":
     st.title("Return Challan")
+    st.caption("Creating a return challan will automatically add stock to Return_Qty.")
     if return_challans_err:
         st.error(f"Failed to load Return_Challan: {return_challans_err}")
     if return_challan_items_err:
@@ -2578,6 +2707,8 @@ elif page == "Return Challan":
     with tab2:
         next_no_rc = next_challan_no(return_challans, "RC")
         st.info(f"Next Challan No: {next_no_rc}")
+        st.warning("⚠️ On save, each item's quantity will be **auto-added** to Return_Qty (stock).")
+
         st.markdown("#### Customer Details")
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -2635,7 +2766,18 @@ elif page == "Return Challan":
                                     "unit": (r["unit"] or "Meter").strip()
                                 })
                             supabase.table(RETURN_CHALLAN_ITEMS_TABLE).insert(payloads_rc).execute()
+
+                            ret_ok, ret_errs = auto_push_return(
+                                next_no_rc, valid_rc, date_str(cd_rc)
+                            )
+
                             st.success(f"Challan {next_no_rc} created with {len(valid_rc)} item(s).")
+                            if ret_ok > 0:
+                                st.info(f"✅ {ret_ok} item(s) auto-added to stock (Return_Qty).")
+                            if ret_errs:
+                                st.warning(f"⚠️ {len(ret_errs)} item(s) could not update stock:")
+                                for e in ret_errs[:5]:
+                                    st.code(e)
                             reset_challan_rows("create_rc")
                             refresh_all()
                     except Exception as e:
@@ -2699,11 +2841,16 @@ elif page == "Return Challan":
                     st.error("Update failed.")
                     st.code(str(e))
 
-            if st.button("Delete Challan", type="secondary", key="del_rc"):
+            st.markdown("---")
+            st.warning("⚠️ Deleting a return challan will also remove its auto-created Return_Qty entries.")
+            if st.button("Delete Challan (+ Reverse Stock)", type="secondary", key="del_rc"):
                 try:
+                    rev_ok, rev_err = delete_return_by_reference(sel_no_rc)
                     supabase.table(RETURN_CHALLAN_TABLE).delete().eq(
                         "challan_id", cid_rc2).execute()
-                    st.success("Deleted.")
+                    st.success("Challan deleted and stock reversed.")
+                    if not rev_ok:
+                        st.warning(f"Note: Could not reverse return entries: {rev_err}")
                     refresh_all()
                 except Exception as e:
                     st.error("Failed.")
@@ -2723,6 +2870,7 @@ elif page == "Return Challan":
                 return_challan_items["challan_id"] == cid_rc3].sort_values("sr_no")
 
             st.markdown(f"#### Items for {sel_no_rc2}")
+            st.caption("ℹ️ Editing items here will NOT auto-adjust Return_Qty. Use delete + recreate for stock changes.")
             if cur_rc.empty:
                 st.info("No items.")
                 next_sr_rc = 1
