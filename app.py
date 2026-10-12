@@ -3147,14 +3147,16 @@ elif page == "Analytics":
 
         if not ret_df.empty and "Date" in ret_df.columns:
             r1 = ret_df.dropna(subset=["Date"]).copy()
-            if not r1.empty:
-                r1["Month"] = r1["Date"].dt.to_period("M").astype(str)
-                ret_monthly = r1.groupby("Month", as_index=False)["Qty"].sum()
-                ret_monthly.columns = ["Month", "Returned"]
-
-        if not disp_monthly.empty or not ret_monthly.empty:
+                    if not disp_monthly.empty or not ret_monthly.empty:
             merged = pd.merge(disp_monthly, ret_monthly,
                               on="Month", how="outer").fillna(0)
+            # Ensure numeric types
+            merged["Month"] = merged["Month"].astype(str)
+            merged["Dispatched"] = pd.to_numeric(
+                merged["Dispatched"], errors="coerce").fillna(0)
+            merged["Returned"] = pd.to_numeric(
+                merged["Returned"], errors="coerce").fillna(0)
+
             fig = px.bar(merged, x="Month", y=["Dispatched", "Returned"],
                          barmode="group", title="Monthly Dispatch vs Return")
             st.plotly_chart(fig, use_container_width=True)
