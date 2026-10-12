@@ -1465,7 +1465,8 @@ def bulk_import_page():
                                      key=f"csv_{target_name}")
         if uploaded is None:
             st.info("Upload a CSV file to continue.")
-            return
+
+        if uploaded is not None:
 
         try:
             df = pd.read_csv(uploaded, dtype=str).fillna("")
