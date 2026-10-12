@@ -285,8 +285,7 @@ def load_all_data():
 
 
 # =========================================================
-# ITEM LOOKUP — 4 attributes
-# Format: Material_Grade - Nominal_Diameter_mm - SDR - Color
+# ITEM LOOKUP
 # =========================================================
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -352,16 +351,22 @@ def next_id_for(table_name, df):
     return get_next_id(df, id_col, prefix)
 
 
+# =========================================================
+# SIMPLE AUTO-INCREMENT SEQUENCES (no year)
+# DC-001, RC-001, INV-001
+# =========================================================
+
 def next_challan_no(df, kind="DC"):
-    today = date.today()
-    prefix = f"{kind}-{today.year}-"
+    prefix = f"{kind}-"
     if df.empty or "challan_no" not in df.columns:
         return f"{prefix}001"
     nums = []
     for v in df["challan_no"].dropna().astype(str):
-        if v.startswith(prefix):
+        s = v.strip()
+        if s.startswith(prefix):
+            tail = s[len(prefix):]
             try:
-                nums.append(int(v[len(prefix):]))
+                nums.append(int(tail))
             except ValueError:
                 continue
     if not nums:
@@ -370,15 +375,16 @@ def next_challan_no(df, kind="DC"):
 
 
 def next_invoice_no(df):
-    today = date.today()
-    prefix = f"INV-{today.year}-"
+    prefix = "INV-"
     if df.empty or "invoice_no" not in df.columns:
         return f"{prefix}001"
     nums = []
     for v in df["invoice_no"].dropna().astype(str):
-        if v.startswith(prefix):
+        s = v.strip()
+        if s.startswith(prefix):
+            tail = s[len(prefix):]
             try:
-                nums.append(int(v[len(prefix):]))
+                nums.append(int(tail))
             except ValueError:
                 continue
     if not nums:
@@ -391,13 +397,8 @@ def next_invoice_no(df):
 # =========================================================
 
 def auto_push_dispatch(challan_no, items_list, challan_date):
-    """
-    Insert each item into Dispatch_Qty with Reference = challan_no.
-    Returns (inserted_count, errors_list).
-    """
     if not items_list:
         return 0, []
-
     try:
         resp = supabase.table(DISPATCH_TABLE).select("*").execute()
         current_df = make_df(resp.data or [], DISPATCH_COLUMNS)
@@ -434,12 +435,8 @@ def auto_push_dispatch(challan_no, items_list, challan_date):
 
 
 def auto_push_return(challan_no, items_list, challan_date):
-    """
-    Insert each item into Return_Qty with Reference = challan_no.
-    """
     if not items_list:
         return 0, []
-
     try:
         resp = supabase.table(RETURN_TABLE).select("*").execute()
         current_df = make_df(resp.data or [], RETURN_COLUMNS)
@@ -476,7 +473,6 @@ def auto_push_return(challan_no, items_list, challan_date):
 
 
 def delete_dispatch_by_reference(challan_no):
-    """Delete all Dispatch_Qty rows with this Reference."""
     try:
         supabase.table(DISPATCH_TABLE).delete().eq("Reference", challan_no).execute()
         return True, None
@@ -485,7 +481,6 @@ def delete_dispatch_by_reference(challan_no):
 
 
 def delete_return_by_reference(challan_no):
-    """Delete all Return_Qty rows with this Reference."""
     try:
         supabase.table(RETURN_TABLE).delete().eq("Reference", challan_no).execute()
         return True, None
@@ -595,21 +590,6 @@ def filter_df(df, search):
         lambda row: s in " ".join(row.values).lower(), axis=1
     )
     return df[mask]
-
-
-def rls_hint(err, table, action="insert"):
-    e = err.lower()
-    if "row-level security" in e or "rls" in e or "policy" in e:
-        return f"Enable RLS policy for {action.upper()} on {table}."
-    if "relation" in e and "does not exist" in e:
-        return f"Table {table} missing in Supabase."
-    if "column" in e and "does not exist" in e:
-        return f"Column mismatch on {table}."
-    if "duplicate key" in e or "unique constraint" in e:
-        return f"Duplicate ID in {table}. Refresh and try again."
-    if "foreign key" in e:
-        return f"Foreign key violation on {table}."
-    return None
 
 
 def empty_state(msg, cta=None):
@@ -733,7 +713,7 @@ color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
   #challan-print .logo-left img, #challan-print .logo-left svg{{width:100px;}}
   #challan-print .letterhead{{padding-right:110px;}}
   #challan-print .cname{{font-size:18px;margin:0 0 3px 0;}}
-  #challan-print .caddr{{font-size:9px;line-height:1.3;}}
+  #challan-page .caddr, #challan-print .caddr{{font-size:9px;line-height:1.3;}}
   #challan-print .meta-row{{font-size:11px;margin:8px 0 6px 0;padding:4px 0;}}
   #challan-print .cust-box{{padding:6px 10px;margin:6px 0 8px 0;}}
   #challan-print .cust-grid{{font-size:10px;gap:4px 16px;}}
@@ -750,8 +730,9 @@ color:#888;font-size:11px;font-weight:700;letter-spacing:1px;}}
 """
 
 
+
 # =========================================================
-# CHALLAN HTML BUILDER
+# CHALLAN HTML
 # =========================================================
 
 def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
@@ -870,10 +851,6 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 </div>
 """
 
-
-# =========================================================
-# INVOICE HTML BUILDER
-# =========================================================
 
 def build_invoice_html(header_row, items_df):
     invoice_no = header_row.get("invoice_no", "") or ""
@@ -1156,8 +1133,6 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 except Exception as e:
                     st.error(f"{label} add failed.")
                     st.code(str(e))
-                    h = rls_hint(str(e), table_name, "insert")
-                    if h: st.info(h)
 
     with tab3:
         if df.empty:
@@ -1224,10 +1199,6 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.code(str(e))
 
 
-# =========================================================
-# CHALLAN ITEMS EDITOR — AUTO-FILL DESCRIPTION
-# =========================================================
-
 def challan_items_editor(key_prefix):
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
@@ -1245,7 +1216,7 @@ def challan_items_editor(key_prefix):
     hc1, hc2, hc3, hc4, hc5 = st.columns([0.5, 2, 4, 2, 2])
     with hc1: st.markdown("**#**")
     with hc2: st.markdown("**Item ID**")
-    with hc3: st.markdown("**Description (auto)**")
+    with hc3: st.markdown("**Description**")
     with hc4: st.markdown("**Qty**")
     with hc5: st.markdown("**Unit**")
 
@@ -1360,7 +1331,7 @@ def invoice_items_editor(key_prefix):
     hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns([0.4, 1.8, 3.5, 1.5, 1.4, 1.5, 1.5])
     with hc1: st.markdown("**#**")
     with hc2: st.markdown("**Item ID**")
-    with hc3: st.markdown("**Description (auto)**")
+    with hc3: st.markdown("**Description**")
     with hc4: st.markdown("**Qty**")
     with hc5: st.markdown("**Unit**")
     with hc6: st.markdown("**Price/Unit**")
@@ -1496,7 +1467,7 @@ def reset_invoice_rows(key_prefix):
 
 
 # =========================================================
-# UNIVERSAL BULK IMPORT
+# UNIVERSAL BULK IMPORT — with column selection
 # =========================================================
 
 IMPORT_TARGETS = {
@@ -1549,30 +1520,25 @@ NUMERIC_TARGETS = {
 
 def bulk_import_page():
     st.title("Bulk Import")
-    st.caption("Upload CSV to import data into any ERP table.")
-    st.markdown("---")
-    st.markdown("#### 1. Select Target Table")
-    target_name = st.selectbox("Which table do you want to import to?",
+    st.caption("Import data from CSV into any module.")
+
+    target_name = st.selectbox("Target Module",
                                 list(IMPORT_TARGETS.keys()),
                                 key="bulk_target_select")
 
     cfg = IMPORT_TARGETS[target_name]
     target_table = cfg["table"]
-    target_cols = cfg["columns"]
+    all_cols = cfg["columns"]
     auto_id_col = cfg["auto_id_col"]
     auto_id_prefix = cfg["auto_id_prefix"]
     has_auto_id = cfg["has_auto_id"]
 
-    st.caption(f"**Target:** `{target_table}`")
-    with st.expander("Expected CSV columns", expanded=False):
-        st.code(", ".join(target_cols))
+    st.markdown(f"**Table:** `{target_table}`")
 
-    st.markdown("---")
-    st.markdown("#### 2. Upload CSV")
-    uploaded = st.file_uploader("Choose CSV file", type=["csv"],
+    uploaded = st.file_uploader("Upload CSV", type=["csv"],
                                  key=f"csv_{target_name}")
     if uploaded is None:
-        st.info("Please upload a CSV file to continue.")
+        st.info("Upload a CSV file to continue.")
         return
 
     try:
@@ -1581,21 +1547,50 @@ def bulk_import_page():
         st.error(f"Failed to read CSV: {e}")
         return
 
-    st.success(f"CSV loaded: **{len(df)} rows**")
-    st.markdown("#### 3. Preview")
-    st.dataframe(df.head(20), use_container_width=True)
+    st.success(f"Loaded {len(df)} rows")
 
-    st.markdown("#### 4. Options")
+    with st.expander("CSV Preview", expanded=False):
+        st.dataframe(df.head(20), use_container_width=True)
+
+    # =====================================================
+    # COLUMN SELECTION
+    # =====================================================
+    st.markdown("#### Select Columns to Import")
+
+    csv_cols = [c for c in all_cols if c in df.columns]
+    missing_csv_cols = [c for c in all_cols if c not in df.columns]
+
+    default_selected = csv_cols.copy()
+
+    selected_cols = st.multiselect(
+        "Columns",
+        options=csv_cols,
+        default=default_selected,
+        key=f"colsel_{target_name}"
+    )
+
+    if not selected_cols:
+        st.warning("Select at least one column.")
+        return
+
+    if missing_csv_cols and target_name != "Item Registration":
+        st.caption(f"CSV does not contain: {', '.join(missing_csv_cols[:5])}"
+                   + ("..." if len(missing_csv_cols) > 5 else ""))
+
+    # =====================================================
+    # AUTO ID
+    # =====================================================
     start_num = 1
     if has_auto_id:
-        c1, c2 = st.columns(2)
+        c1, c2 = st.columns([1, 2])
         with c1:
             start_num = st.number_input(
-                f"Start numbering for {auto_id_col} from",
+                f"Start {auto_id_col} from",
                 min_value=1, value=1, step=1,
-                help=f"e.g. 1 → {auto_id_prefix}-001")
+                key=f"start_{target_name}"
+            )
         with c2:
-            st.info(f"New IDs: `{auto_id_prefix}-{int(start_num):03d}`, "
+            st.info(f"IDs: `{auto_id_prefix}-{int(start_num):03d}`, "
                     f"`{auto_id_prefix}-{int(start_num) + 1:03d}`, ...")
 
     def _clean(v):
@@ -1611,28 +1606,24 @@ def bulk_import_page():
         record = {}
         if has_auto_id:
             record[auto_id_col] = f"{auto_id_prefix}-{int(start_num) + idx:03d}"
-        for col in target_cols:
+        for col in selected_cols:
             if col == auto_id_col and has_auto_id:
                 continue
-            if col in df.columns:
-                val = _clean(row.get(col, ""))
-                if col in NUMERIC_TARGETS.get(target_name, []):
-                    try:
-                        val = float(val) if val != "" else 0.0
-                    except Exception:
-                        val = 0.0
-                record[col] = val if val != "" else None
+            val = _clean(row.get(col, ""))
+            if col in NUMERIC_TARGETS.get(target_name, []):
+                try:
+                    val = float(val) if val != "" else 0.0
+                except Exception:
+                    val = 0.0
+            record[col] = val if val != "" else None
         payloads.append(record)
 
-    st.markdown("#### 5. Preview (First 20 Rows)")
-    preview_df = pd.DataFrame(payloads)
-    st.dataframe(preview_df.head(20), use_container_width=True)
-    st.caption(f"Total: {len(payloads)} records ready to insert.")
+    with st.expander("Insert Preview", expanded=False):
+        preview_df = pd.DataFrame(payloads)
+        st.dataframe(preview_df.head(20), use_container_width=True)
+        st.caption(f"{len(payloads)} records will be inserted")
 
-    st.markdown("---")
-    st.markdown("#### 6. Insert")
-
-    if st.button(f"Insert All Records into `{target_table}`",
+    if st.button(f"Insert {len(payloads)} Records",
                  type="primary", key=f"bulk_insert_{target_name}"):
         progress = st.progress(0)
         status = st.empty()
@@ -1658,18 +1649,17 @@ def bulk_import_page():
                         failed += 1
                         id_val = p.get(auto_id_col, "?")
                         errors_list.append(f"{id_val}: {str(ee)[:120]}")
-                status.text(f"Inserted {inserted}/{total} (some failed)")
+                status.text(f"Inserted {inserted}/{total}")
                 progress.progress(min((i + len(batch)) / total, 1.0))
 
         progress.progress(1.0)
-        st.markdown("---")
         if failed == 0:
-            st.success(f"✅ Successfully inserted **{inserted}** records.")
+            st.success(f"Inserted {inserted} records.")
         else:
-            st.warning(f"⚠️ Inserted: **{inserted}** | Failed: **{failed}**")
+            st.warning(f"Inserted: {inserted} | Failed: {failed}")
         if errors_list:
-            with st.expander(f"Show {len(errors_list)} error(s)"):
-                for e in errors_list[:50]:
+            with st.expander(f"{len(errors_list)} error(s)"):
+                for e in errors_list[:30]:
                     st.code(e)
         refresh_all()
 
@@ -1736,6 +1726,7 @@ st.markdown(
 
 if page == "Executive Dashboard":
     st.title("Executive Dashboard")
+
     t = TOTALS
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1767,12 +1758,93 @@ if page == "Executive Dashboard":
                 <div class="metric-caption">Good output ratio</div>
             </div>""", unsafe_allow_html=True)
 
+    # ---------- CHARTS ----------
+    st.markdown("---")
+
+    # Row 1 — Production status + Machine-wise
+    ch1, ch2 = st.columns(2)
+    with ch1:
+        st.subheader("Production Status")
+        if not production.empty:
+            sdf = (production["Production_Status"].fillna("Unknown")
+                   .value_counts().rename_axis("Status").reset_index(name="Count"))
+            fig = px.pie(sdf, names="Status", values="Count", hole=0.5)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            empty_state("No production data.")
+
+    with ch2:
+        st.subheader("Production by Machine")
+        if not production.empty and "Production_Line" in production.columns:
+            mdf = production.groupby("Production_Line", as_index=False)[
+                ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"]
+            ].sum()
+            fig = px.bar(mdf, x="Production_Line",
+                         y=["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"],
+                         barmode="group")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            empty_state("No production data.")
+
+    # Row 2 — Registered Items by Material Grade + Color
+    ch3, ch4 = st.columns(2)
+    with ch3:
+        st.subheader("Items by Material Grade")
+        if not items.empty and "Material_Grade" in items.columns:
+            idf = (items["Material_Grade"].fillna("Unknown")
+                   .value_counts().head(10)
+                   .rename_axis("Material_Grade").reset_index(name="Count"))
+            fig = px.bar(idf, x="Material_Grade", y="Count",
+                         text_auto=True)
+            fig.update_layout(xaxis_tickangle=-30)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            empty_state("No item data.")
+
+    with ch4:
+        st.subheader("Items by Color")
+        if not items.empty and "Color" in items.columns:
+            cdf = (items["Color"].fillna("Unknown")
+                   .value_counts().head(10)
+                   .rename_axis("Color").reset_index(name="Count"))
+            fig = px.pie(cdf, names="Color", values="Count", hole=0.5)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            empty_state("No item data.")
+
+    # Row 3 — Items by Diameter + Application
+    ch5, ch6 = st.columns(2)
+    with ch5:
+        st.subheader("Items by Diameter")
+        if not items.empty and "Nominal_Diameter_mm" in items.columns:
+            ddf = (items["Nominal_Diameter_mm"].fillna("Unknown")
+                   .value_counts().head(15)
+                   .rename_axis("Diameter").reset_index(name="Count"))
+            fig = px.bar(ddf, x="Diameter", y="Count", text_auto=True)
+            fig.update_layout(xaxis_tickangle=-30)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            empty_state("No item data.")
+
+    with ch6:
+        st.subheader("Items by Application")
+        if not items.empty and "Application" in items.columns:
+            adf = (items["Application"].fillna("Unknown")
+                   .value_counts().head(10)
+                   .rename_axis("Application").reset_index(name="Count"))
+            fig = px.bar(adf, x="Application", y="Count", text_auto=True)
+            fig.update_layout(xaxis_tickangle=-30)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            empty_state("No item data.")
+
+    # Stock ledger
     st.markdown("---")
     st.subheader("Stock Ledger")
     if not STOCK_LEDGER.empty:
         st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
     else:
-        empty_state("No ledger data available.")
+        empty_state("No stock data.")
 
 
 elif page == "Bulk Import":
@@ -1782,13 +1854,13 @@ elif page == "Bulk Import":
 elif page == "Item Registration":
     st.title("Item Registration")
     if items_err:
-        st.error(f"Failed to load Item table: {items_err}")
+        st.error(f"Failed to load items: {items_err}")
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Item", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("Search Item",
-                               placeholder="Item ID, Item Code, Material Grade...")
+        search = st.text_input("Search",
+                               placeholder="Item ID, Code, Grade...")
         display = filter_df(items, search)
         st.dataframe(display, use_container_width=True, hide_index=True)
         st.caption(f"{len(display)} record(s)")
@@ -1827,7 +1899,7 @@ elif page == "Item Registration":
                 st.success(f"Item {next_item_id} added.")
                 refresh_all()
             except Exception as e:
-                st.error("Item add failed.")
+                st.error("Add failed.")
                 st.code(str(e))
 
     with tab3:
@@ -1889,12 +1961,12 @@ elif page == "Item Registration":
 elif page == "Production":
     st.title("Production")
     if production_err:
-        st.error(f"Failed to load Production: {production_err}")
+        st.error(f"Failed to load production: {production_err}")
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Production", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("Search Production",
+        search = st.text_input("Search",
                                placeholder="Production ID, Item ID, Batch...")
         display = filter_df(production, search)
         if "Production_Date" in display.columns:
@@ -1907,7 +1979,7 @@ elif page == "Production":
         next_production_id = next_id_for(PRODUCTION_TABLE, production)
         st.info(f"Next Production ID: {next_production_id}")
         if items.empty:
-            st.warning("Add an item in Item Registration first.")
+            st.warning("Add an item first.")
         else:
             options = get_item_options(items)
             with st.form("add_production_form"):
@@ -1939,7 +2011,7 @@ elif page == "Production":
                     st.success(f"Production {next_production_id} added.")
                     refresh_all()
                 except Exception as e:
-                    st.error("Production add failed.")
+                    st.error("Add failed.")
                     st.code(str(e))
 
     with tab3:
@@ -1982,7 +2054,7 @@ elif page == "Production":
                         "Rejected_Qty_m": edit_rejected,
                         "Production_Status": edit_status
                     }).eq("Production_ID", selected_id).execute()
-                    st.success("Production updated.")
+                    st.success("Updated.")
                     refresh_all()
                 except Exception as e:
                     st.error("Update failed.")
@@ -1992,7 +2064,7 @@ elif page == "Production":
                 try:
                     supabase.table(PRODUCTION_TABLE).delete().eq(
                         "Production_ID", selected_id).execute()
-                    st.success("Production deleted.")
+                    st.success("Deleted.")
                     refresh_all()
                 except Exception as e:
                     st.error("Delete failed.")
@@ -2001,7 +2073,6 @@ elif page == "Production":
 
 elif page == "Stock Control":
     st.title("Stock Control")
-    st.caption("Dispatch and Return are auto-managed by Delivery/Return Challans.")
     stock_tabs = st.tabs(["Opening Stock", "Production Qty", "Dispatch Qty",
                           "Return Qty", "Closing Stock"])
     with stock_tabs[0]:
@@ -2011,13 +2082,11 @@ elif page == "Stock Control":
         crud_stock_table(PRODUCTION_QTY_TABLE, prod_qty, "Production_ID",
                          "Production Qty", items, prod_qty_err)
     with stock_tabs[2]:
-        st.markdown("### Dispatch Qty")
-        st.caption("⚠️ Auto-managed by Delivery Challans. Manual entries will show `Reference = MANUAL`.")
+        st.caption("Dispatch entries are auto-created by Delivery Challans.")
         crud_stock_table(DISPATCH_TABLE, dispatch, "Dispatch_ID",
                          "Dispatch Qty", items, dispatch_err)
     with stock_tabs[3]:
-        st.markdown("### Return Qty")
-        st.caption("⚠️ Auto-managed by Return Challans. Manual entries will show `Reference = MANUAL`.")
+        st.caption("Return entries are auto-created by Return Challans.")
         crud_stock_table(RETURN_TABLE, return_qty, "Return_ID",
                          "Return Qty", items, return_err)
     with stock_tabs[4]:
@@ -2027,18 +2096,18 @@ elif page == "Stock Control":
             ledger_view["Auto_Date"] = today_str()
             st.dataframe(ledger_view, use_container_width=True, hide_index=True)
         else:
-            empty_state("No stock data available yet.")
+            empty_state("No stock data.")
 
 
 elif page == "Stock Adjustment":
     st.title("Stock Adjustment")
     if adjustment_err:
-        st.error(f"Failed to load Stock_Adjustment: {adjustment_err}")
+        st.error(f"Failed to load adjustments: {adjustment_err}")
 
     tab1, tab2, tab3 = st.tabs(["View Records", "Add Adjustment", "Update / Delete"])
 
     with tab1:
-        search = st.text_input("Search Adjustment",
+        search = st.text_input("Search",
                                placeholder="Adjustment ID, Item ID, Reason...")
         display = filter_df(adjustment, search)
         if "Adjustment_Date" in display.columns:
@@ -2076,7 +2145,7 @@ elif page == "Stock Adjustment":
                     st.success(f"Adjustment {next_adj_id} added.")
                     refresh_all()
                 except Exception as e:
-                    st.error("Failed.")
+                    st.error("Add failed.")
                     st.code(str(e))
 
     with tab3:
@@ -2143,7 +2212,7 @@ elif page == "Stock Adjustment":
 elif page == "Physical Check":
     st.title("Physical Check")
     if STOCK_LEDGER.empty:
-        empty_state("No stock data available yet.")
+        empty_state("No stock data available.")
         st.stop()
 
     ledger = STOCK_LEDGER.copy()
@@ -2218,13 +2287,10 @@ elif page == "Physical Check":
 
 elif page == "Delivery Challan":
     st.title("Delivery Challan")
-    st.caption("Creating a challan will automatically deduct stock from Dispatch_Qty.")
     if challans_err:
-        st.error(f"Failed to load Delivery_Challan: {challans_err}")
-    if challan_items_err:
-        st.error(f"Failed to load Delivery_Challan_Items: {challan_items_err}")
+        st.error(f"Failed to load challans: {challans_err}")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["View / Print", "Create", "Update / Delete", "Manage Items"])
+    tab1, tab2, tab3 = st.tabs(["View / Print", "Create", "Update / Delete"])
 
     with tab1:
         if challans.empty:
@@ -2262,7 +2328,7 @@ elif page == "Delivery Challan":
                     pass
 
             if display_dc.empty:
-                st.warning("No challans match the search.")
+                st.warning("No challans match.")
             else:
                 left_col, right_col = st.columns([1, 1.6])
                 with left_col:
@@ -2285,18 +2351,6 @@ elif page == "Delivery Challan":
                     items_for = challan_items[
                         challan_items["challan_id"] == picked_id].sort_values("sr_no")
 
-                    st.markdown("---")
-                    st.markdown(
-                        f"**Challan No:** {picked_row.get('challan_no', '')}  \n"
-                        f"**Date:** {fmt_date_only(picked_row.get('challan_date', ''))}  \n"
-                        f"**Customer:** {picked_row.get('customer_name', '')}  \n"
-                        f"**Contact:** {picked_row.get('contact_detail', '')}  \n"
-                        f"**Project:** {picked_row.get('project', '')}  \n"
-                        f"**Location:** {picked_row.get('location', '')}  \n"
-                        f"**Sales Head:** {picked_row.get('sales_head', '')}  \n"
-                        f"**Payment Terms:** {picked_row.get('payment_terms', '')}  \n"
-                        f"**Items:** {len(items_for)}")
-
                 with right_col:
                     st.markdown("#### Print / Download")
                     html = build_challan_html(picked_row, items_for, "DELIVERY CHALLAN")
@@ -2314,11 +2368,10 @@ elif page == "Delivery Challan":
                             mime="text/html", use_container_width=True, key="html_dc")
 
                     if not items_for.empty:
-                        st.download_button("CSV (Items)",
+                        st.download_button("CSV",
                             data=items_for.to_csv(index=False).encode("utf-8"),
                             file_name=f"{picked_row.get('challan_no', 'dc')}_items.csv",
                             mime="text/csv", use_container_width=True, key="csv_dc")
-                        st.markdown("#### Items")
                         st.dataframe(items_for[
                             ["sr_no", "item_id", "description", "quantity", "unit"]
                         ], use_container_width=True, hide_index=True)
@@ -2326,9 +2379,7 @@ elif page == "Delivery Challan":
     with tab2:
         next_no_dc = next_challan_no(challans, "DC")
         st.info(f"Next Challan No: {next_no_dc}")
-        st.warning("⚠️ On save, each item's quantity will be **auto-deducted** from Dispatch_Qty (stock).")
 
-        st.markdown("#### Customer Details")
         c1, c2, c3 = st.columns(3)
         with c1:
             cd_dc = st.date_input("Challan Date", value=date.today(), key="cd_dc")
@@ -2356,7 +2407,7 @@ elif page == "Delivery Challan":
                 valid_dc = [r for r in item_rows_dc
                             if r["description"].strip() and r["quantity"] > 0]
                 if not valid_dc:
-                    st.error("At least one valid item row required.")
+                    st.error("Add at least one valid item.")
                 else:
                     try:
                         hdr_dc = {
@@ -2390,17 +2441,15 @@ elif page == "Delivery Challan":
                                 next_no_dc, valid_dc, date_str(cd_dc)
                             )
 
-                            st.success(f"Challan {next_no_dc} created with {len(valid_dc)} item(s).")
+                            st.success(f"Challan {next_no_dc} created ({len(valid_dc)} items).")
                             if disp_ok > 0:
-                                st.info(f"✅ {disp_ok} item(s) auto-deducted from stock (Dispatch_Qty).")
+                                st.info(f"{disp_ok} item(s) deducted from stock.")
                             if disp_errs:
-                                st.warning(f"⚠️ {len(disp_errs)} item(s) could not update stock:")
-                                for e in disp_errs[:5]:
-                                    st.code(e)
+                                st.warning(f"{len(disp_errs)} item(s) stock sync failed.")
                             reset_challan_rows("create_dc")
                             refresh_all()
                     except Exception as e:
-                        st.error("Failed.")
+                        st.error("Create failed.")
                         st.code(str(e))
 
     with tab3:
@@ -2460,151 +2509,24 @@ elif page == "Delivery Challan":
                     st.error("Update failed.")
                     st.code(str(e))
 
-            st.markdown("---")
-            st.warning("⚠️ Deleting a challan will also remove its auto-created Dispatch_Qty entries.")
-            if st.button("Delete Challan (+ Reverse Stock)", type="secondary", key="del_dc"):
+            if st.button("Delete Challan", type="secondary", key="del_dc"):
                 try:
-                    # Reverse auto-pushed dispatch entries
-                    rev_ok, rev_err = delete_dispatch_by_reference(sel_no_dc)
-                    # Delete challan (cascade deletes items)
+                    delete_dispatch_by_reference(sel_no_dc)
                     supabase.table(CHALLAN_TABLE).delete().eq(
                         "challan_id", cid_dc2).execute()
-                    st.success("Challan deleted and stock reversed.")
-                    if not rev_ok:
-                        st.warning(f"Note: Could not reverse dispatch entries: {rev_err}")
+                    st.success("Deleted and stock reversed.")
                     refresh_all()
                 except Exception as e:
-                    st.error("Failed.")
+                    st.error("Delete failed.")
                     st.code(str(e))
-
-    with tab4:
-        if challans.empty:
-            st.info("No challans.")
-        else:
-            sel_no_dc2 = st.selectbox("Select Challan",
-                challans["challan_no"].astype(str).tolist(), key="items_dc")
-            sel_row_dc2 = challans.loc[
-                challans["challan_no"].astype(str) == sel_no_dc2].iloc[0]
-            cid_dc3 = sel_row_dc2["challan_id"]
-
-            cur_dc = challan_items[
-                challan_items["challan_id"] == cid_dc3].sort_values("sr_no")
-
-            st.markdown(f"#### Items for {sel_no_dc2}")
-            st.caption("ℹ️ Editing items here will NOT auto-adjust Dispatch_Qty. Use delete + recreate for stock changes.")
-            if cur_dc.empty:
-                st.info("No items.")
-                next_sr_dc = 1
-            else:
-                st.dataframe(cur_dc, use_container_width=True, hide_index=True)
-                next_sr_dc = int(cur_dc["sr_no"].max()) + 1
-
-            item_options_dc = get_item_options(items)
-            with st.form("add_item_dc_form"):
-                st.markdown("#### Add New Item")
-                c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
-                with c1:
-                    if item_options_dc:
-                        ni_dc = st.selectbox("Item ID",
-                            ["(none)"] + item_options_dc, key="add_ci_dc")
-                    else:
-                        ni_dc = st.text_input("Item ID", key="add_cit_dc")
-                with c2:
-                    auto_desc_dc = auto_description(ni_dc) if ni_dc != "(none)" else ""
-                    nd_dc = st.text_input("Description", value=auto_desc_dc,
-                                          key=f"add_cd_dc_{ni_dc}")
-                with c3:
-                    nq_dc = st.number_input("Qty", min_value=0.0, value=0.0,
-                                            step=1.0, key="add_cq_dc")
-                with c4:
-                    nu_dc = st.text_input("Unit", value="Meter", key="add_cu_dc")
-                ad_dc = st.form_submit_button("Add", type="primary")
-
-            if ad_dc:
-                if not nd_dc.strip() or nq_dc <= 0:
-                    st.error("Desc + Qty required.")
-                else:
-                    try:
-                        supabase.table(CHALLAN_ITEMS_TABLE).insert({
-                            "challan_id": cid_dc3, "sr_no": next_sr_dc,
-                            "item_id": ni_dc if ni_dc != "(none)" else None,
-                            "description": nd_dc.strip(),
-                            "quantity": nq_dc, "unit": nu_dc.strip() or "Meter"
-                        }).execute()
-                        st.success("Added.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Failed.")
-                        st.code(str(e))
-
-            if not cur_dc.empty:
-                st.markdown("---")
-                st.markdown("#### Edit / Delete")
-                eid_dc = st.selectbox("Select Item",
-                    cur_dc["challan_item_id"].astype(str).tolist(),
-                    key="edit_ci_sel_dc")
-                er_dc = cur_dc.loc[
-                    cur_dc["challan_item_id"].astype(str) == eid_dc].iloc[0]
-
-                with st.form("edit_item_dc_form"):
-                    c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
-                    with c1:
-                        ce_dc = str(er_dc["item_id"]) if pd.notna(er_dc["item_id"]) else "(none)"
-                        if item_options_dc:
-                            idx = item_options_dc.index(ce_dc) + 1 if ce_dc in item_options_dc else 0
-                            ei_dc = st.selectbox("Item ID",
-                                ["(none)"] + item_options_dc, index=idx,
-                                key="edit_ci_dc")
-                        else:
-                            ei_dc = st.text_input("Item ID", value=ce_dc, key="edit_cit_dc")
-                    with c2:
-                        ed_dc = st.text_input("Description",
-                            value=str(er_dc["description"]) if pd.notna(er_dc["description"]) else "",
-                            key="edit_cd_dc")
-                    with c3:
-                        eq_dc = st.number_input("Qty", min_value=0.0,
-                            value=float(er_dc["quantity"]) if pd.notna(er_dc["quantity"]) else 0.0,
-                            step=1.0, key="edit_cq_dc")
-                    with c4:
-                        eu_dc = st.text_input("Unit",
-                            value=str(er_dc["unit"]) if pd.notna(er_dc["unit"]) else "Meter",
-                            key="edit_cu_dc")
-                    sv_dc = st.form_submit_button("Save", type="primary")
-
-                if sv_dc:
-                    try:
-                        supabase.table(CHALLAN_ITEMS_TABLE).update({
-                            "item_id": ei_dc if ei_dc != "(none)" else None,
-                            "description": ed_dc.strip(),
-                            "quantity": eq_dc,
-                            "unit": eu_dc.strip() or "Meter"
-                        }).eq("challan_item_id", eid_dc).execute()
-                        st.success("Updated.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Update failed.")
-                        st.code(str(e))
-
-                if st.button("Delete Item", type="secondary", key="del_ci_dc"):
-                    try:
-                        supabase.table(CHALLAN_ITEMS_TABLE).delete().eq(
-                            "challan_item_id", eid_dc).execute()
-                        st.success("Deleted.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Failed.")
-                        st.code(str(e))
 
 
 elif page == "Return Challan":
     st.title("Return Challan")
-    st.caption("Creating a return challan will automatically add stock to Return_Qty.")
     if return_challans_err:
-        st.error(f"Failed to load Return_Challan: {return_challans_err}")
-    if return_challan_items_err:
-        st.error(f"Failed to load Return_Challan_Items: {return_challan_items_err}")
+        st.error(f"Failed to load return challans: {return_challans_err}")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["View / Print", "Create", "Update / Delete", "Manage Items"])
+    tab1, tab2, tab3 = st.tabs(["View / Print", "Create", "Update / Delete"])
 
     with tab1:
         if return_challans.empty:
@@ -2642,7 +2564,7 @@ elif page == "Return Challan":
                     pass
 
             if display_rc.empty:
-                st.warning("No challans match the search.")
+                st.warning("No challans match.")
             else:
                 left_col_rc, right_col_rc = st.columns([1, 1.6])
                 with left_col_rc:
@@ -2666,18 +2588,6 @@ elif page == "Return Challan":
                         return_challan_items["challan_id"] == picked_id_rc
                     ].sort_values("sr_no")
 
-                    st.markdown("---")
-                    st.markdown(
-                        f"**Challan No:** {picked_row_rc.get('challan_no', '')}  \n"
-                        f"**Date:** {fmt_date_only(picked_row_rc.get('challan_date', ''))}  \n"
-                        f"**Customer:** {picked_row_rc.get('customer_name', '')}  \n"
-                        f"**Contact:** {picked_row_rc.get('contact_detail', '')}  \n"
-                        f"**Project:** {picked_row_rc.get('project', '')}  \n"
-                        f"**Location:** {picked_row_rc.get('location', '')}  \n"
-                        f"**Sales Head:** {picked_row_rc.get('sales_head', '')}  \n"
-                        f"**Payment Terms:** {picked_row_rc.get('payment_terms', '')}  \n"
-                        f"**Items:** {len(items_for_rc)}")
-
                 with right_col_rc:
                     st.markdown("#### Print / Download")
                     html_rc = build_challan_html(picked_row_rc, items_for_rc, "RETURN CHALLAN")
@@ -2695,11 +2605,10 @@ elif page == "Return Challan":
                             mime="text/html", use_container_width=True, key="html_rc")
 
                     if not items_for_rc.empty:
-                        st.download_button("CSV (Items)",
+                        st.download_button("CSV",
                             data=items_for_rc.to_csv(index=False).encode("utf-8"),
                             file_name=f"{picked_row_rc.get('challan_no', 'rc')}_items.csv",
                             mime="text/csv", use_container_width=True, key="csv_rc")
-                        st.markdown("#### Items")
                         st.dataframe(items_for_rc[
                             ["sr_no", "item_id", "description", "quantity", "unit"]
                         ], use_container_width=True, hide_index=True)
@@ -2707,9 +2616,7 @@ elif page == "Return Challan":
     with tab2:
         next_no_rc = next_challan_no(return_challans, "RC")
         st.info(f"Next Challan No: {next_no_rc}")
-        st.warning("⚠️ On save, each item's quantity will be **auto-added** to Return_Qty (stock).")
 
-        st.markdown("#### Customer Details")
         c1, c2, c3 = st.columns(3)
         with c1:
             cd_rc = st.date_input("Challan Date", value=date.today(), key="cd_rc")
@@ -2737,7 +2644,7 @@ elif page == "Return Challan":
                 valid_rc = [r for r in item_rows_rc
                             if r["description"].strip() and r["quantity"] > 0]
                 if not valid_rc:
-                    st.error("At least one valid item row required.")
+                    st.error("Add at least one valid item.")
                 else:
                     try:
                         hdr_rc = {
@@ -2771,17 +2678,15 @@ elif page == "Return Challan":
                                 next_no_rc, valid_rc, date_str(cd_rc)
                             )
 
-                            st.success(f"Challan {next_no_rc} created with {len(valid_rc)} item(s).")
+                            st.success(f"Challan {next_no_rc} created ({len(valid_rc)} items).")
                             if ret_ok > 0:
-                                st.info(f"✅ {ret_ok} item(s) auto-added to stock (Return_Qty).")
+                                st.info(f"{ret_ok} item(s) added to stock.")
                             if ret_errs:
-                                st.warning(f"⚠️ {len(ret_errs)} item(s) could not update stock:")
-                                for e in ret_errs[:5]:
-                                    st.code(e)
+                                st.warning(f"{len(ret_errs)} item(s) stock sync failed.")
                             reset_challan_rows("create_rc")
                             refresh_all()
                     except Exception as e:
-                        st.error("Failed.")
+                        st.error("Create failed.")
                         st.code(str(e))
 
     with tab3:
@@ -2841,148 +2746,24 @@ elif page == "Return Challan":
                     st.error("Update failed.")
                     st.code(str(e))
 
-            st.markdown("---")
-            st.warning("⚠️ Deleting a return challan will also remove its auto-created Return_Qty entries.")
-            if st.button("Delete Challan (+ Reverse Stock)", type="secondary", key="del_rc"):
+            if st.button("Delete Challan", type="secondary", key="del_rc"):
                 try:
-                    rev_ok, rev_err = delete_return_by_reference(sel_no_rc)
+                    delete_return_by_reference(sel_no_rc)
                     supabase.table(RETURN_CHALLAN_TABLE).delete().eq(
                         "challan_id", cid_rc2).execute()
-                    st.success("Challan deleted and stock reversed.")
-                    if not rev_ok:
-                        st.warning(f"Note: Could not reverse return entries: {rev_err}")
+                    st.success("Deleted and stock reversed.")
                     refresh_all()
                 except Exception as e:
-                    st.error("Failed.")
+                    st.error("Delete failed.")
                     st.code(str(e))
-
-    with tab4:
-        if return_challans.empty:
-            st.info("No challans.")
-        else:
-            sel_no_rc2 = st.selectbox("Select Challan",
-                return_challans["challan_no"].astype(str).tolist(), key="items_rc")
-            sel_row_rc2 = return_challans.loc[
-                return_challans["challan_no"].astype(str) == sel_no_rc2].iloc[0]
-            cid_rc3 = sel_row_rc2["challan_id"]
-
-            cur_rc = return_challan_items[
-                return_challan_items["challan_id"] == cid_rc3].sort_values("sr_no")
-
-            st.markdown(f"#### Items for {sel_no_rc2}")
-            st.caption("ℹ️ Editing items here will NOT auto-adjust Return_Qty. Use delete + recreate for stock changes.")
-            if cur_rc.empty:
-                st.info("No items.")
-                next_sr_rc = 1
-            else:
-                st.dataframe(cur_rc, use_container_width=True, hide_index=True)
-                next_sr_rc = int(cur_rc["sr_no"].max()) + 1
-
-            item_options_rc = get_item_options(items)
-            with st.form("add_item_rc_form"):
-                st.markdown("#### Add New Item")
-                c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
-                with c1:
-                    if item_options_rc:
-                        ni_rc = st.selectbox("Item ID",
-                            ["(none)"] + item_options_rc, key="add_ci_rc")
-                    else:
-                        ni_rc = st.text_input("Item ID", key="add_cit_rc")
-                with c2:
-                    auto_desc_rc = auto_description(ni_rc) if ni_rc != "(none)" else ""
-                    nd_rc = st.text_input("Description", value=auto_desc_rc,
-                                          key=f"add_cd_rc_{ni_rc}")
-                with c3:
-                    nq_rc = st.number_input("Qty", min_value=0.0, value=0.0,
-                                            step=1.0, key="add_cq_rc")
-                with c4:
-                    nu_rc = st.text_input("Unit", value="Meter", key="add_cu_rc")
-                ad_rc = st.form_submit_button("Add", type="primary")
-
-            if ad_rc:
-                if not nd_rc.strip() or nq_rc <= 0:
-                    st.error("Desc + Qty required.")
-                else:
-                    try:
-                        supabase.table(RETURN_CHALLAN_ITEMS_TABLE).insert({
-                            "challan_id": cid_rc3, "sr_no": next_sr_rc,
-                            "item_id": ni_rc if ni_rc != "(none)" else None,
-                            "description": nd_rc.strip(),
-                            "quantity": nq_rc, "unit": nu_rc.strip() or "Meter"
-                        }).execute()
-                        st.success("Added.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Failed.")
-                        st.code(str(e))
-
-            if not cur_rc.empty:
-                st.markdown("---")
-                st.markdown("#### Edit / Delete")
-                eid_rc = st.selectbox("Select Item",
-                    cur_rc["challan_item_id"].astype(str).tolist(),
-                    key="edit_ci_sel_rc")
-                er_rc = cur_rc.loc[
-                    cur_rc["challan_item_id"].astype(str) == eid_rc].iloc[0]
-
-                with st.form("edit_item_rc_form"):
-                    c1, c2, c3, c4 = st.columns([2, 4, 2, 2])
-                    with c1:
-                        ce_rc = str(er_rc["item_id"]) if pd.notna(er_rc["item_id"]) else "(none)"
-                        if item_options_rc:
-                            idx = item_options_rc.index(ce_rc) + 1 if ce_rc in item_options_rc else 0
-                            ei_rc = st.selectbox("Item ID",
-                                ["(none)"] + item_options_rc, index=idx,
-                                key="edit_ci_rc")
-                        else:
-                            ei_rc = st.text_input("Item ID", value=ce_rc, key="edit_cit_rc")
-                    with c2:
-                        ed_rc = st.text_input("Description",
-                            value=str(er_rc["description"]) if pd.notna(er_rc["description"]) else "",
-                            key="edit_cd_rc")
-                    with c3:
-                        eq_rc = st.number_input("Qty", min_value=0.0,
-                            value=float(er_rc["quantity"]) if pd.notna(er_rc["quantity"]) else 0.0,
-                            step=1.0, key="edit_cq_rc")
-                    with c4:
-                        eu_rc = st.text_input("Unit",
-                            value=str(er_rc["unit"]) if pd.notna(er_rc["unit"]) else "Meter",
-                            key="edit_cu_rc")
-                    sv_rc = st.form_submit_button("Save", type="primary")
-
-                if sv_rc:
-                    try:
-                        supabase.table(RETURN_CHALLAN_ITEMS_TABLE).update({
-                            "item_id": ei_rc if ei_rc != "(none)" else None,
-                            "description": ed_rc.strip(),
-                            "quantity": eq_rc,
-                            "unit": eu_rc.strip() or "Meter"
-                        }).eq("challan_item_id", eid_rc).execute()
-                        st.success("Updated.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Update failed.")
-                        st.code(str(e))
-
-                if st.button("Delete Item", type="secondary", key="del_ci_rc"):
-                    try:
-                        supabase.table(RETURN_CHALLAN_ITEMS_TABLE).delete().eq(
-                            "challan_item_id", eid_rc).execute()
-                        st.success("Deleted.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Failed.")
-                        st.code(str(e))
 
 
 elif page == "Invoice":
     st.title("Invoice")
     if invoices_err:
-        st.error(f"Failed to load Invoice: {invoices_err}")
-    if invoice_items_err:
-        st.error(f"Failed to load Invoice_Items: {invoice_items_err}")
+        st.error(f"Failed to load invoices: {invoices_err}")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["View / Print", "Create", "Update / Delete", "Manage Items"])
+    tab1, tab2, tab3 = st.tabs(["View / Print", "Create", "Update / Delete"])
 
     with tab1:
         if invoices.empty:
@@ -2991,7 +2772,7 @@ elif page == "Invoice":
             c1, c2, c3 = st.columns([2, 1, 1])
             with c1:
                 search_inv = st.text_input("Search",
-                    placeholder="Invoice No, Customer, DC No...", key="search_inv")
+                    placeholder="Invoice No, Customer...", key="search_inv")
             with c2:
                 sort_by_inv = st.selectbox("Sort by",
                     ["Invoice Date", "Invoice ID", "Invoice No"], key="sortby_inv")
@@ -3020,7 +2801,7 @@ elif page == "Invoice":
                     pass
 
             if display_inv.empty:
-                st.warning("No invoices match the search.")
+                st.warning("No invoices match.")
             else:
                 left_col, right_col = st.columns([1, 1.6])
                 with left_col:
@@ -3043,26 +2824,6 @@ elif page == "Invoice":
                     items_for = invoice_items[
                         invoice_items["invoice_id"] == picked_id].sort_values("sr_no")
 
-                    dc_no = ""
-                    try:
-                        if pd.notna(picked_row.get("dc_id")) and not challans.empty:
-                            m = challans[challans["challan_id"] == int(picked_row["dc_id"])]
-                            if not m.empty:
-                                dc_no = str(m.iloc[0].get("challan_no", ""))
-                    except Exception:
-                        pass
-
-                    st.markdown("---")
-                    st.markdown(
-                        f"**Invoice No:** {picked_row.get('invoice_no', '')}  \n"
-                        f"**Date:** {fmt_date_only(picked_row.get('invoice_date', ''))}  \n"
-                        f"**Customer:** {picked_row.get('customer_name', '')}  \n"
-                        f"**Contact:** {picked_row.get('contact_detail', '')}  \n"
-                        f"**DC No:** {dc_no}  \n"
-                        f"**Sales Head:** {picked_row.get('sales_head', '')}  \n"
-                        f"**Items:** {len(items_for)}  \n"
-                        f"**Current Bill:** Rs. {float(picked_row.get('current_bill_amt', 0) or 0):,.2f}")
-
                 with right_col:
                     st.markdown("#### Print / Download")
                     html = build_invoice_html(picked_row, items_for)
@@ -3080,11 +2841,10 @@ elif page == "Invoice":
                             mime="text/html", use_container_width=True, key="html_inv")
 
                     if not items_for.empty:
-                        st.download_button("CSV (Items)",
+                        st.download_button("CSV",
                             data=items_for.to_csv(index=False).encode("utf-8"),
                             file_name=f"{picked_row.get('invoice_no', 'inv')}_items.csv",
                             mime="text/csv", use_container_width=True, key="csv_inv")
-                        st.markdown("#### Items")
                         st.dataframe(items_for[
                             ["sr_no", "item_id", "description", "quantity",
                              "unit", "price_per_unit", "amount"]
@@ -3094,7 +2854,6 @@ elif page == "Invoice":
         next_no_inv = next_invoice_no(invoices)
         st.info(f"Next Invoice No: {next_no_inv}")
 
-        st.markdown("#### Invoice Details")
         c1, c2, c3 = st.columns(3)
         with c1:
             inv_date = st.date_input("Invoice Date", value=date.today(), key="inv_date")
@@ -3104,8 +2863,7 @@ elif page == "Invoice":
             inv_sales_head = st.text_input("Sales Head", key="inv_sh")
             dc_opts = get_dc_options(challans)
             dc_labels = ["(none)"] + [o[0] for o in dc_opts]
-            dc_sel = st.selectbox("DC ID (from Delivery Challan)",
-                                   dc_labels, key="inv_dc")
+            dc_sel = st.selectbox("DC ID", dc_labels, key="inv_dc")
             inv_dc_id = None
             if dc_sel != "(none)":
                 for label, cid in dc_opts:
@@ -3114,8 +2872,7 @@ elif page == "Invoice":
                         break
             inv_bank = st.text_input("Bank", key="inv_bank")
         with c3:
-            inv_pay_mode = st.selectbox("Payment Mode", PAYMENT_MODES,
-                                         key="inv_pay")
+            inv_pay_mode = st.selectbox("Payment Mode", PAYMENT_MODES, key="inv_pay")
             inv_cartage = st.number_input("Cartage", min_value=0.0, value=0.0,
                                            step=0.01, format="%.2f", key="inv_cart")
             inv_amt_recv = st.number_input("Amount Received", min_value=0.0,
@@ -3125,7 +2882,7 @@ elif page == "Invoice":
                                                value=0.0, step=0.01,
                                                format="%.2f", key="inv_out")
 
-        st.markdown("#### Signature Fields (Manual Entry)")
+        st.markdown("#### Signature Fields")
         csig1, csig2, csig3 = st.columns(3)
         with csig1:
             inv_prepared_by = st.text_input("Prepared By", key="inv_prep")
@@ -3145,9 +2902,8 @@ elif page == "Invoice":
             for r in item_rows_inv
         )
         auto_bill = items_total + float(inv_cartage)
-        st.info(f"**Items Total:** Rs. {items_total:,.2f}  |  "
-                f"**Cartage:** Rs. {float(inv_cartage):,.2f}  |  "
-                f"**Auto Bill Amount:** Rs. {auto_bill:,.2f}")
+        st.info(f"Items: Rs. {items_total:,.2f} | Cartage: Rs. {float(inv_cartage):,.2f} | "
+                f"Bill: Rs. {auto_bill:,.2f}")
 
         st.markdown("---")
         if st.button("Create Invoice", type="primary", key="create_btn_inv"):
@@ -3157,7 +2913,7 @@ elif page == "Invoice":
                 valid_inv = [r for r in item_rows_inv
                              if r["description"].strip() and r["quantity"] > 0]
                 if not valid_inv:
-                    st.error("At least one valid item row required.")
+                    st.error("Add at least one valid item.")
                 else:
                     try:
                         hdr_inv = {
@@ -3194,11 +2950,11 @@ elif page == "Invoice":
                                     "unit": (r["unit"] or "Meter").strip()
                                 })
                             supabase.table(INVOICE_ITEMS_TABLE).insert(payloads_inv).execute()
-                            st.success(f"Invoice {next_no_inv} created with {len(valid_inv)} item(s).")
+                            st.success(f"Invoice {next_no_inv} created ({len(valid_inv)} items).")
                             reset_invoice_rows("create_inv")
                             refresh_all()
                     except Exception as e:
-                        st.error("Failed.")
+                        st.error("Create failed.")
                         st.code(str(e))
 
     with tab3:
@@ -3240,14 +2996,13 @@ elif page == "Invoice":
                     eamt_inv = st.number_input("Amount Received", min_value=0.0,
                         value=float(sel_row_inv.get("amount_received", 0) or 0),
                         step=0.01, format="%.2f", key="eamt_inv")
-                    ebil_inv = st.number_input("Current Bill Amount", min_value=0.0,
+                    ebil_inv = st.number_input("Bill Amount", min_value=0.0,
                         value=float(sel_row_inv.get("current_bill_amt", 0) or 0),
                         step=0.01, format="%.2f", key="ebil_inv")
                     eout_inv = st.number_input("Outstanding", min_value=0.0,
                         value=float(sel_row_inv.get("outstanding", 0) or 0),
                         step=0.01, format="%.2f", key="eout_inv")
 
-                st.markdown("#### Signature Fields")
                 cs1, cs2, cs3 = st.columns(3)
                 with cs1:
                     eprep = st.text_input("Prepared By", value=_v_inv("prepared_by"), key="eprep_inv")
@@ -3257,7 +3012,7 @@ elif page == "Invoice":
                     eauth = st.text_input("Authorized Signatory", value=_v_inv("authorized_signatory"), key="eauth_inv")
 
                 erem_inv = st.text_area("Remarks", value=_v_inv("remarks"), height=70, key="erem_inv")
-                upd_inv = st.form_submit_button("Update Header", type="primary")
+                upd_inv = st.form_submit_button("Update Invoice", type="primary")
 
             if upd_inv:
                 try:
@@ -3290,154 +3045,253 @@ elif page == "Invoice":
                     st.success("Deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error("Failed.")
+                    st.error("Delete failed.")
                     st.code(str(e))
-
-    with tab4:
-        if invoices.empty:
-            st.info("No invoices.")
-        else:
-            sel_no_inv2 = st.selectbox("Select Invoice",
-                invoices["invoice_no"].astype(str).tolist(), key="items_inv")
-            sel_row_inv2 = invoices.loc[
-                invoices["invoice_no"].astype(str) == sel_no_inv2].iloc[0]
-            inv_id_edit2 = sel_row_inv2["invoice_id"]
-
-            cur_inv = invoice_items[
-                invoice_items["invoice_id"] == inv_id_edit2].sort_values("sr_no")
-
-            st.markdown(f"#### Items for {sel_no_inv2}")
-            if cur_inv.empty:
-                st.info("No items.")
-                next_sr_inv = 1
-            else:
-                st.dataframe(cur_inv, use_container_width=True, hide_index=True)
-                next_sr_inv = int(cur_inv["sr_no"].max()) + 1
-
-            item_options_inv = get_item_options(items)
-            with st.form("add_item_inv_form"):
-                st.markdown("#### Add New Item")
-                c1, c2, c3, c4, c5, c6 = st.columns([2, 4, 1.5, 1.5, 1.5, 1.5])
-                with c1:
-                    if item_options_inv:
-                        ni_inv = st.selectbox("Item ID",
-                            ["(none)"] + item_options_inv, key="add_ci_inv")
-                    else:
-                        ni_inv = st.text_input("Item ID", key="add_cit_inv")
-                with c2:
-                    auto_desc_inv = auto_description(ni_inv) if ni_inv != "(none)" else ""
-                    nd_inv = st.text_input("Description", value=auto_desc_inv,
-                                            key=f"add_cd_inv_{ni_inv}")
-                with c3:
-                    nq_inv = st.number_input("Qty", min_value=0.0, value=0.0,
-                                              step=1.0, key="add_cq_inv")
-                with c4:
-                    nu_inv = st.text_input("Unit", value="Meter", key="add_cu_inv")
-                with c5:
-                    npr_inv = st.number_input("Price/Unit", min_value=0.0, value=0.0,
-                                               step=0.01, format="%.2f", key="add_cpr_inv")
-                with c6:
-                    nam_inv = st.number_input("Amount", min_value=0.0, value=0.0,
-                                               step=0.01, format="%.2f", key="add_cam_inv")
-                ad_inv = st.form_submit_button("Add", type="primary")
-
-            if ad_inv:
-                if not nd_inv.strip() or nq_inv <= 0:
-                    st.error("Desc + Qty required.")
-                else:
-                    try:
-                        amt_val = float(nam_inv) if nam_inv > 0 else float(nq_inv) * float(npr_inv)
-                        supabase.table(INVOICE_ITEMS_TABLE).insert({
-                            "invoice_id": inv_id_edit2, "sr_no": next_sr_inv,
-                            "item_id": ni_inv if ni_inv != "(none)" else None,
-                            "description": nd_inv.strip(),
-                            "quantity": nq_inv, "unit": nu_inv.strip() or "Meter",
-                            "price_per_unit": float(npr_inv),
-                            "amount": amt_val
-                        }).execute()
-                        st.success("Added.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Failed.")
-                        st.code(str(e))
-
-            if not cur_inv.empty:
-                st.markdown("---")
-                st.markdown("#### Edit / Delete")
-                eid_inv = st.selectbox("Select Item",
-                    cur_inv["invoice_item_id"].astype(str).tolist(),
-                    key="edit_ci_sel_inv")
-                er_inv = cur_inv.loc[
-                    cur_inv["invoice_item_id"].astype(str) == eid_inv].iloc[0]
-
-                with st.form("edit_item_inv_form"):
-                    c1, c2, c3, c4, c5, c6 = st.columns([2, 4, 1.5, 1.5, 1.5, 1.5])
-                    with c1:
-                        ce_inv = str(er_inv["item_id"]) if pd.notna(er_inv["item_id"]) else "(none)"
-                        if item_options_inv:
-                            idx = item_options_inv.index(ce_inv) + 1 if ce_inv in item_options_inv else 0
-                            ei_inv = st.selectbox("Item ID",
-                                ["(none)"] + item_options_inv, index=idx,
-                                key="edit_ci_inv")
-                        else:
-                            ei_inv = st.text_input("Item ID", value=ce_inv, key="edit_cit_inv")
-                    with c2:
-                        ed_inv = st.text_input("Description",
-                            value=str(er_inv["description"]) if pd.notna(er_inv["description"]) else "",
-                            key="edit_cd_inv")
-                    with c3:
-                        eq_inv = st.number_input("Qty", min_value=0.0,
-                            value=float(er_inv["quantity"]) if pd.notna(er_inv["quantity"]) else 0.0,
-                            step=1.0, key="edit_cq_inv")
-                    with c4:
-                        eu_inv = st.text_input("Unit",
-                            value=str(er_inv["unit"]) if pd.notna(er_inv["unit"]) else "Meter",
-                            key="edit_cu_inv")
-                    with c5:
-                        epr_inv = st.number_input("Price/Unit", min_value=0.0,
-                            value=float(er_inv["price_per_unit"]) if pd.notna(er_inv["price_per_unit"]) else 0.0,
-                            step=0.01, format="%.2f", key="edit_cpr_inv")
-                    with c6:
-                        eam_inv = st.number_input("Amount", min_value=0.0,
-                            value=float(er_inv["amount"]) if pd.notna(er_inv["amount"]) else 0.0,
-                            step=0.01, format="%.2f", key="edit_cam_inv")
-                    sv_inv = st.form_submit_button("Save", type="primary")
-
-                if sv_inv:
-                    try:
-                        supabase.table(INVOICE_ITEMS_TABLE).update({
-                            "item_id": ei_inv if ei_inv != "(none)" else None,
-                            "description": ed_inv.strip(),
-                            "quantity": eq_inv,
-                            "unit": eu_inv.strip() or "Meter",
-                            "price_per_unit": float(epr_inv),
-                            "amount": float(eam_inv)
-                        }).eq("invoice_item_id", eid_inv).execute()
-                        st.success("Updated.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Update failed.")
-                        st.code(str(e))
-
-                if st.button("Delete Item", type="secondary", key="del_ci_inv"):
-                    try:
-                        supabase.table(INVOICE_ITEMS_TABLE).delete().eq(
-                            "invoice_item_id", eid_inv).execute()
-                        st.success("Deleted.")
-                        refresh_all()
-                    except Exception as e:
-                        st.error("Failed.")
-                        st.code(str(e))
 
 
 elif page == "Analytics":
     st.title("Analytics")
+
+    # 1. Production
     st.subheader("Production Performance")
     if not production.empty:
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Planned", f"{TOTALS['planned']:,.0f} m")
         c2.metric("Good", f"{TOTALS['good']:,.0f} m")
         c3.metric("Rejected", f"{TOTALS['rejected']:,.0f} m")
+        c4.metric("Yield %", f"{TOTALS['yield_pct']:.1f}%")
+
+        cp1, cp2 = st.columns(2)
+        with cp1:
+            sdf = (production["Production_Status"].fillna("Unknown")
+                   .value_counts().rename_axis("Status").reset_index(name="Count"))
+            fig = px.pie(sdf, names="Status", values="Count", hole=0.5,
+                         title="Production Status Breakdown")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with cp2:
+            try:
+                pdf = production.copy()
+                pdf["Month"] = pd.to_datetime(
+                    pdf["Production_Date"], errors="coerce").dt.to_period("M").astype(str)
+                mdf = pdf.groupby("Month", as_index=False)[
+                    ["Good_Qty_m", "Rejected_Qty_m", "Planned_Qty_m"]].sum()
+                fig = px.line(mdf, x="Month",
+                              y=["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"],
+                              markers=True, title="Monthly Production Trend")
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception:
+                pass
+
+        if "Production_Line" in production.columns:
+            mdf = production.groupby("Production_Line", as_index=False)[
+                ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"]].sum()
+            fig = px.bar(mdf, x="Production_Line",
+                         y=["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"],
+                         barmode="group", title="Production by Machine")
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        empty_state("No production data.")
+
+    st.markdown("---")
+
+    # 2. Stock
+    st.subheader("Stock Ledger Overview")
+    if not STOCK_LEDGER.empty:
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Opening", f"{TOTALS['opening']:,.0f}")
+        c2.metric("Total Produced", f"{TOTALS['prod_qty']:,.0f}")
+        c3.metric("Total Dispatched", f"{TOTALS['dispatched']:,.0f}")
+        c4.metric("Total Closing", f"{TOTALS['closing']:,.0f}")
+
+        fig = px.bar(STOCK_LEDGER, x="Item_ID",
+                     y=["Opening", "Produced", "Dispatched",
+                        "Returned", "Adjusted", "Closing"],
+                     barmode="group", title="Stock Ledger by Item")
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(STOCK_LEDGER, use_container_width=True, hide_index=True)
+    else:
+        empty_state("No stock ledger data.")
+
+    st.markdown("---")
+
+    # 3. Dispatch vs Return
+    st.subheader("Dispatch vs Return Trend")
+    if not dispatch.empty or not return_qty.empty:
+        disp_df = dispatch.copy()
+        ret_df = return_qty.copy()
+
+        if not disp_df.empty and "Entry_Date" in disp_df.columns:
+            disp_df["Date"] = pd.to_datetime(disp_df["Entry_Date"], errors="coerce")
+        if not ret_df.empty and "Entry_Date" in ret_df.columns:
+            ret_df["Date"] = pd.to_datetime(ret_df["Entry_Date"], errors="coerce")
+
+        disp_monthly = pd.DataFrame(columns=["Month", "Dispatched"])
+        ret_monthly = pd.DataFrame(columns=["Month", "Returned"])
+
+        if not disp_df.empty and "Date" in disp_df.columns:
+            d1 = disp_df.dropna(subset=["Date"]).copy()
+            if not d1.empty:
+                d1["Month"] = d1["Date"].dt.to_period("M").astype(str)
+                disp_monthly = d1.groupby("Month", as_index=False)["Qty"].sum()
+                disp_monthly.columns = ["Month", "Dispatched"]
+
+        if not ret_df.empty and "Date" in ret_df.columns:
+            r1 = ret_df.dropna(subset=["Date"]).copy()
+            if not r1.empty:
+                r1["Month"] = r1["Date"].dt.to_period("M").astype(str)
+                ret_monthly = r1.groupby("Month", as_index=False)["Qty"].sum()
+                ret_monthly.columns = ["Month", "Returned"]
+
+        if not disp_monthly.empty or not ret_monthly.empty:
+            merged = pd.merge(disp_monthly, ret_monthly,
+                              on="Month", how="outer").fillna(0)
+            fig = px.bar(merged, x="Month", y=["Dispatched", "Returned"],
+                         barmode="group", title="Monthly Dispatch vs Return")
+            st.plotly_chart(fig, use_container_width=True)
+
+        if not disp_df.empty:
+            top_disp = (disp_df.groupby("Item_ID", as_index=False)["Qty"]
+                        .sum().sort_values("Qty", ascending=False).head(10))
+            fig = px.bar(top_disp, x="Item_ID", y="Qty",
+                         title="Top 10 Dispatched Items", text_auto=True)
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        empty_state("No dispatch/return data.")
+
+    st.markdown("---")
+
+    # 4. Challans
+    st.subheader("Challan Summary")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Delivery Challans", len(challans))
+    c2.metric("DC Items", len(challan_items))
+    c3.metric("Return Challans", len(return_challans))
+    c4.metric("RC Items", len(return_challan_items))
+
+    challan_concat = []
+    if not challans.empty:
+        d1 = challans[["challan_date"]].copy(); d1["Type"] = "Delivery"
+        challan_concat.append(d1)
+    if not return_challans.empty:
+        d2 = return_challans[["challan_date"]].copy(); d2["Type"] = "Return"
+        challan_concat.append(d2)
+
+    if challan_concat:
+        cdf = pd.concat(challan_concat, ignore_index=True)
+        cdf["challan_date"] = pd.to_datetime(cdf["challan_date"], errors="coerce")
+        cdf["Month"] = cdf["challan_date"].dt.to_period("M").astype(str)
+        monthly = cdf.groupby(["Month", "Type"]).size().reset_index(name="Count")
+        if not monthly.empty:
+            fig = px.bar(monthly, x="Month", y="Count", color="Type",
+                         barmode="group", title="Challans per Month")
+            st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+
+    # 5. Invoice
+    st.subheader("Invoice & Finance Analytics")
+    if not invoices.empty:
+        inv = invoices.copy()
+        inv["invoice_date"] = pd.to_datetime(inv["invoice_date"], errors="coerce")
+
+        total_bill = pd.to_numeric(inv["current_bill_amt"], errors="coerce").fillna(0).sum()
+        total_received = pd.to_numeric(inv["amount_received"], errors="coerce").fillna(0).sum()
+        total_outstanding = pd.to_numeric(inv["outstanding"], errors="coerce").fillna(0).sum()
+        total_cartage = pd.to_numeric(inv["cartage"], errors="coerce").fillna(0).sum()
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Billed", f"Rs. {total_bill:,.2f}")
+        c2.metric("Received", f"Rs. {total_received:,.2f}")
+        c3.metric("Outstanding", f"Rs. {total_outstanding:,.2f}")
+        c4.metric("Cartage", f"Rs. {total_cartage:,.2f}")
+
+        inv["Month"] = inv["invoice_date"].dt.to_period("M").astype(str)
+        try:
+            mdf = inv.groupby("Month", as_index=False).agg(
+                Billed=("current_bill_amt", "sum"),
+                Received=("amount_received", "sum"),
+                Outstanding=("outstanding", "sum")
+            )
+            fig = px.line(mdf, x="Month",
+                          y=["Billed", "Received", "Outstanding"],
+                          markers=True, title="Monthly Billing Trend")
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            pass
+
+        if "payment_mode" in inv.columns:
+            pdf = inv["payment_mode"].fillna("Unknown").value_counts().reset_index()
+            pdf.columns = ["Payment_Mode", "Count"]
+            fig = px.pie(pdf, names="Payment_Mode", values="Count",
+                         hole=0.5, title="Payment Mode Distribution")
+            st.plotly_chart(fig, use_container_width=True)
+
+        if "customer_name" in inv.columns:
+            top_cust = inv.groupby("customer_name", as_index=False).agg(
+                Billed=("current_bill_amt", "sum"),
+                Outstanding=("outstanding", "sum")
+            ).sort_values("Billed", ascending=False).head(10)
+            fig = px.bar(top_cust, x="customer_name",
+                         y=["Billed", "Outstanding"],
+                         barmode="group", title="Top 10 Customers by Billing")
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        empty_state("No invoice data.")
+
+    st.markdown("---")
+
+    # 6. Stock Adjustment
+    st.subheader("Stock Adjustment Summary")
+    if not adjustment.empty:
+        adj_df = adjustment.copy()
+        adj_df["Qty"] = pd.to_numeric(adj_df["Qty"], errors="coerce").fillna(0)
+
+        reason_summary = adj_df.groupby("Reason", as_index=False)["Qty"].sum()
+        fig = px.bar(reason_summary, x="Reason", y="Qty",
+                     title="Adjustments by Reason", text_auto=True)
+        st.plotly_chart(fig, use_container_width=True)
+
+        item_adj = adj_df.groupby("Item_ID", as_index=False)["Qty"].sum().sort_values("Qty")
+        fig = px.bar(item_adj, x="Item_ID", y="Qty",
+                     title="Adjustments by Item")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        empty_state("No stock adjustment data.")
+
+    st.markdown("---")
+
+    # 7. Key Insights
+    st.subheader("Key Insights")
+    insights = []
+
+    if TOTALS['planned'] > 0:
+        eff = (TOTALS['good'] / TOTALS['planned']) * 100
+        insights.append(f"Production efficiency: **{eff:.1f}%** "
+                        f"({TOTALS['good']:,.0f}m good of {TOTALS['planned']:,.0f}m planned)")
+
+    if TOTALS['closing'] > 0:
+        insights.append(f"Current closing stock: **{TOTALS['closing']:,.0f}** units "
+                        f"across {len(STOCK_LEDGER)} items")
+
+    if TOTALS['dispatched'] > 0:
+        insights.append(f"Total dispatched: **{TOTALS['dispatched']:,.0f}** units")
+
+    if TOTALS['returned'] > 0 and TOTALS['dispatched'] > 0:
+        ret_pct = (TOTALS['returned'] / TOTALS['dispatched'] * 100)
+        insights.append(f"Return rate: **{ret_pct:.1f}%** "
+                        f"({TOTALS['returned']:,.0f} of {TOTALS['dispatched']:,.0f} dispatched)")
+
+    if not invoices.empty:
+        total_out = pd.to_numeric(invoices["outstanding"], errors="coerce").fillna(0).sum()
+        insights.append(f"Outstanding receivables: **Rs. {total_out:,.2f}** "
+                        f"across {len(invoices)} invoices")
+
+    if insights:
+        for ins in insights:
+            st.markdown(f"- {ins}")
+    else:
+        st.info("Add more data to see insights.")
 
 
 elif page == "Custom Charts":
