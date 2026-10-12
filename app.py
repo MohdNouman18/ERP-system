@@ -3147,7 +3147,7 @@ elif page == "Analytics":
 
         if not ret_df.empty and "Date" in ret_df.columns:
             r1 = ret_df.dropna(subset=["Date"]).copy()
-                    if not disp_monthly.empty or not ret_monthly.empty:
+        if not disp_monthly.empty or not ret_monthly.empty:
             merged = pd.merge(disp_monthly, ret_monthly,
                               on="Month", how="outer").fillna(0)
             # Ensure numeric types
