@@ -6,7 +6,11 @@ from datetime import date, datetime
 
 import pandas as pd
 import plotly.express as px
+import plotly.io as pio
 import streamlit as st
+
+# Force light theme for all Plotly charts
+pio.templates.default = "plotly_white"
 from supabase import create_client, Client
 
 
