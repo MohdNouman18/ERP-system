@@ -18,6 +18,10 @@ st.set_page_config(
 )
 
 
+# =========================================================
+# CONSTANTS
+# =========================================================
+
 ITEM_TABLE = "Item_Registration"
 PRODUCTION_TABLE = "Production"
 OPENING_TABLE = "Opening_Stock"
@@ -32,6 +36,7 @@ RETURN_CHALLAN_TABLE = "Return_Challan"
 RETURN_CHALLAN_ITEMS_TABLE = "Return_Challan_Items"
 INVOICE_TABLE = "Invoice"
 INVOICE_ITEMS_TABLE = "Invoice_Items"
+USERS_TABLE = "Users"
 
 ITEM_COLUMNS = (
     "Item_ID", "Item_Code", "Material_Grade", "Application",
@@ -116,6 +121,46 @@ COMPANY_ADDR_LINE3 = (
 )
 
 
+# =========================================================
+# ROLE → MODULES MAPPING
+# =========================================================
+
+ROLE_MODULES = {
+    "admin": [
+        "Executive Dashboard",
+        "Item Registration",
+        "Bulk Import",
+        "Data Management",
+    ],
+    "accountant": [
+        "Executive Dashboard",
+        "Delivery Challan",
+        "Return Challan",
+        "Invoice",
+        "Analytics",
+    ],
+    "manager": [
+        "Executive Dashboard",
+        "Item Registration",
+        "Bulk Import",
+        "Production",
+        "Stock Control",
+        "Stock Adjustment",
+        "Physical Check",
+        "Delivery Challan",
+        "Return Challan",
+        "Invoice",
+        "Analytics",
+        "Custom Charts",
+        "Data Management",
+    ],
+}
+
+
+# =========================================================
+# CSS
+# =========================================================
+
 @st.cache_data(show_spinner=False)
 def _read_css():
     try:
@@ -129,6 +174,10 @@ _css = _read_css()
 if _css:
     st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
 
+
+# =========================================================
+# SUPABASE
+# =========================================================
 
 @st.cache_resource(show_spinner=False)
 def get_supabase_client(url: str, key: str) -> Client:
@@ -149,6 +198,10 @@ except Exception as e:
     st.code(str(e))
     st.stop()
 
+
+# =========================================================
+# HELPER FUNCTIONS
+# =========================================================
 
 def _normalize_columns(df, expected):
     if df is None or df.empty:
@@ -586,6 +639,18 @@ def empty_state(msg, cta=None):
     )
 
 
+def section_title(title, subtitle=""):
+    st.markdown(
+        f"""
+        <div class="form-section">
+            <div class="form-section-title">{title}</div>
+            {f'<div class="form-section-sub">{subtitle}</div>' if subtitle else ''}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
 @st.cache_data(show_spinner=False)
 def get_logo_base64():
     for path in ["logo.png", "logo.jpg", "logo.jpeg"]:
@@ -616,6 +681,126 @@ def logo_html():
         </g>
     </svg>"""
 
+
+# =========================================================
+# LOGIN STATE
+# =========================================================
+
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
+if "user" not in st.session_state:
+    st.session_state.user = None
+
+
+def login_user(username, password):
+    try:
+        resp = (
+            supabase.table(USERS_TABLE)
+            .select("*")
+            .eq("username", username.strip())
+            .eq("password", password.strip())
+            .eq("is_active", True)
+            .execute()
+        )
+        if resp.data and len(resp.data) > 0:
+            return resp.data[0]
+        return None
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def logout_user():
+    st.session_state.logged_in = False
+    st.session_state.user = None
+    st.rerun()
+
+
+def render_login_page():
+    st.markdown("""
+        <style>
+        section.main > div { padding-top: 0rem; }
+        </style>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([1, 1.2, 1])
+
+    with c2:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+
+        if os.path.exists("logo.png"):
+            logo_col1, logo_col2, logo_col3 = st.columns([1, 1, 1])
+            with logo_col2:
+                st.image("logo.png", use_container_width=True)
+        elif os.path.exists("logo.jpg"):
+            logo_col1, logo_col2, logo_col3 = st.columns([1, 1, 1])
+            with logo_col2:
+                st.image("logo.jpg", use_container_width=True)
+
+        st.markdown(
+            """
+            <div style="text-align:center; margin: 12px 0 26px 0;">
+                <div style="font-size: 22px; font-weight: 800;
+                            letter-spacing: 1px; color: #0f1720;">
+                    FLEX HEAD INDUSTRIES
+                </div>
+                <div style="font-size: 11px; letter-spacing: 3px;
+                            color: #64748b; margin-top: 4px;">
+                    ERP MANAGEMENT SYSTEM
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        with st.form("login_form"):
+            st.markdown(
+                "<h3 style='text-align:center; color:#21866e; margin-bottom:8px;'>Sign In</h3>",
+                unsafe_allow_html=True
+            )
+
+            username = st.text_input("Username", placeholder="Enter username")
+            password = st.text_input("Password", type="password",
+                                     placeholder="Enter password")
+
+            submit = st.form_submit_button("Login", type="primary",
+                                            use_container_width=True)
+
+            if submit:
+                if not username.strip() or not password.strip():
+                    st.error("Please enter both username and password.")
+                else:
+                    user = login_user(username, password)
+
+                    if user and "error" in user:
+                        st.error(f"Connection error: {user['error']}")
+                    elif user:
+                        st.session_state.logged_in = True
+                        st.session_state.user = user
+                        st.success(
+                            f"Welcome, {user.get('full_name', user['username'])}!"
+                        )
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password.")
+
+
+# =========================================================
+# LOGIN GATE
+# =========================================================
+
+if not st.session_state.logged_in:
+    render_login_page()
+    st.stop()
+
+
+CURRENT_USER = st.session_state.user or {}
+USER_ROLE = CURRENT_USER.get("role", "manager")
+USER_NAME = CURRENT_USER.get("full_name") or CURRENT_USER.get("username", "User")
+
+
+# =========================================================
+# LETTERHEAD / PRINT CSS (unchanged)
+# =========================================================
 
 def _letterhead_block():
     logo_markup = logo_html()
@@ -1033,43 +1218,46 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
+        section_title(f"New {label} Entry",
+                      f"Fields marked with * are required")
+
         next_id = next_id_for(table_name, df)
-        st.info(f"Next {id_col}: {next_id}")
 
-        if items_df.empty:
-            st.warning("Add an item first.")
-        else:
-            options = get_item_options(items_df)
-            with st.form(f"add_{table_name}_form"):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    selected_item = st.selectbox("Item ID", options,
-                                                 key=f"ai_{table_name}")
-                with c2:
-                    qty = st.number_input("Quantity", min_value=0.0, value=0.0,
-                                          step=1.0, key=f"aq_{table_name}")
-                with c3:
-                    entry_date = st.date_input("Entry Date", value=date.today(),
-                                               key=f"ad_{table_name}")
-                submit = st.form_submit_button(f"Add {label}", type="primary")
+        with st.form(f"add_{table_name}_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.text_input(f"{id_col} (Auto)", value=next_id, disabled=True,
+                              key=f"ai_disp_{table_name}")
+                selected_item = st.selectbox("Item ID *", get_item_options(items_df),
+                                             key=f"ai_{table_name}")
+            with c2:
+                qty = st.number_input("Quantity *", min_value=0.0, value=0.0,
+                                      step=1.0, key=f"aq_{table_name}")
+            with c3:
+                entry_date = st.date_input("Entry Date *", value=date.today(),
+                                           key=f"ad_{table_name}")
 
-            if submit:
-                try:
-                    payload = {
-                        id_col: next_id,
-                        "Item_ID": selected_item,
-                        "Qty": qty,
-                        "Entry_Date": date_str(entry_date)
-                    }
-                    if table_name == DISPATCH_TABLE:
-                        payload["Reference"] = "MANUAL"
-                    if table_name == RETURN_TABLE:
-                        payload["Reference"] = "MANUAL"
-                    supabase.table(table_name).insert(payload).execute()
-                    st.success(f"{label} {next_id} added.")
-                    refresh_all()
-                except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+            st.markdown("---")
+            submit = st.form_submit_button(f"Save {label}", type="primary",
+                                            use_container_width=True)
+
+        if submit:
+            try:
+                payload = {
+                    id_col: next_id,
+                    "Item_ID": selected_item,
+                    "Qty": qty,
+                    "Entry_Date": date_str(entry_date)
+                }
+                if table_name == DISPATCH_TABLE:
+                    payload["Reference"] = "MANUAL"
+                if table_name == RETURN_TABLE:
+                    payload["Reference"] = "MANUAL"
+                supabase.table(table_name).insert(payload).execute()
+                st.success(f"{label} {next_id} saved successfully.")
+                refresh_all()
+            except Exception as e:
+                st.error(f"Save failed: {str(e)}")
 
     with tab3:
         if df.empty:
@@ -1092,6 +1280,8 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
             except Exception:
                 pass
 
+        section_title(f"Edit {label}", f"{id_col}: {selected_id}")
+
         with st.form(f"upd_{table_name}_form"):
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -1110,7 +1300,9 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
             with c3:
                 edit_date = st.date_input("Entry Date", value=current_date,
                                           key=f"ed_{table_name}")
-            update = st.form_submit_button("Update", type="primary")
+            st.markdown("---")
+            update = st.form_submit_button("Update", type="primary",
+                                            use_container_width=True)
 
         if update:
             try:
@@ -1121,7 +1313,7 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.success(f"{label} updated.")
                 refresh_all()
             except Exception as e:
-                st.error(f"Failed: {str(e)}")
+                st.error(f"Update failed: {str(e)}")
 
         st.markdown("---")
         if st.button(f"Delete {label}", type="secondary",
@@ -1131,7 +1323,7 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.success(f"{label} deleted.")
                 refresh_all()
             except Exception as e:
-                st.error(f"Failed: {str(e)}")
+                st.error(f"Delete failed: {str(e)}")
 
 
 def challan_items_editor(key_prefix):
@@ -1392,10 +1584,6 @@ def reset_invoice_rows(key_prefix):
     st.session_state[counter_key] = 1
 
 
-# =========================================================
-# BULK IMPORT
-# =========================================================
-
 IMPORT_TARGETS = {
     "Item Registration": {"table": ITEM_TABLE, "columns": list(ITEM_COLUMNS),
         "auto_id_col": "Item_ID", "auto_id_prefix": "ITM", "has_auto_id": True},
@@ -1415,32 +1603,12 @@ IMPORT_TARGETS = {
     "Stock Adjustment": {"table": ADJUSTMENT_TABLE,
         "columns": list(ADJUSTMENT_COLUMNS),
         "auto_id_col": "Adjustment_ID", "auto_id_prefix": "ADJ", "has_auto_id": True},
-    "Delivery Challan": {"table": CHALLAN_TABLE, "columns": list(CHALLAN_COLUMNS),
-        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False},
-    "Delivery Challan Items": {"table": CHALLAN_ITEMS_TABLE,
-        "columns": list(CHALLAN_ITEMS_COLUMNS),
-        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False},
-    "Return Challan": {"table": RETURN_CHALLAN_TABLE,
-        "columns": list(RETURN_CHALLAN_COLUMNS),
-        "auto_id_col": "challan_id", "auto_id_prefix": "", "has_auto_id": False},
-    "Return Challan Items": {"table": RETURN_CHALLAN_ITEMS_TABLE,
-        "columns": list(RETURN_CHALLAN_ITEMS_COLUMNS),
-        "auto_id_col": "challan_item_id", "auto_id_prefix": "", "has_auto_id": False},
-    "Invoice": {"table": INVOICE_TABLE, "columns": list(INVOICE_COLUMNS),
-        "auto_id_col": "invoice_id", "auto_id_prefix": "", "has_auto_id": False},
-    "Invoice Items": {"table": INVOICE_ITEMS_TABLE,
-        "columns": list(INVOICE_ITEMS_COLUMNS),
-        "auto_id_col": "invoice_item_id", "auto_id_prefix": "", "has_auto_id": False},
 }
 
 NUMERIC_TARGETS = {
     "Production": ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"],
     "Opening Stock": ["Qty"], "Production Qty": ["Qty"], "Dispatch Qty": ["Qty"],
     "Return Qty": ["Qty"], "Closing Stock": ["Qty"], "Stock Adjustment": ["Qty"],
-    "Delivery Challan Items": ["quantity", "sr_no"],
-    "Return Challan Items": ["quantity", "sr_no"],
-    "Invoice": ["cartage", "amount_received", "current_bill_amt", "outstanding"],
-    "Invoice Items": ["quantity", "price_per_unit", "amount", "sr_no"],
 }
 
 
@@ -1449,9 +1617,6 @@ def bulk_import_page():
 
     tab1, tab2 = st.tabs(["Import Data", "Download All Data"])
 
-    # =====================================================
-    # TAB 1: IMPORT DATA
-    # =====================================================
     with tab1:
         target_name = st.selectbox("Target Module",
                                     list(IMPORT_TARGETS.keys()),
@@ -1575,9 +1740,6 @@ def bulk_import_page():
                                     st.code(e)
                         refresh_all()
 
-    # =====================================================
-    # TAB 2: DOWNLOAD ALL DATA
-    # =====================================================
     with tab2:
         st.markdown("#### All Module Data Export")
 
@@ -1605,8 +1767,6 @@ def bulk_import_page():
 
         st.markdown("---")
 
-        st.markdown("#### Download All (CSV)")
-
         try:
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1626,8 +1786,6 @@ def bulk_import_page():
             st.error(f"Failed: {e}")
 
         st.markdown("---")
-
-        st.markdown("#### Download All (Excel)")
 
         try:
             excel_buffer = io.BytesIO()
@@ -1656,10 +1814,8 @@ def bulk_import_page():
 
         st.markdown("---")
 
-        st.markdown("#### Download Individual Table")
-
         selected_table = st.selectbox(
-            "Select Table",
+            "Download Individual Table",
             list(all_data.keys()),
             key="dl_individual_select"
         )
@@ -1729,24 +1885,35 @@ with st.sidebar:
 
     st.markdown("---")
 
-    page = st.radio(
-        "MODULES",
-        [
-            "Executive Dashboard",
-            "Item Registration",
-            "Bulk Import",
-            "Production",
-            "Stock Control",
-            "Stock Adjustment",
-            "Physical Check",
-            "Delivery Challan",
-            "Return Challan",
-            "Invoice",
-            "Analytics",
-            "Custom Charts",
-            "Data Management"
-        ]
+    st.markdown(
+        f"""
+        <div style="padding: 10px 12px; margin: 6px 0 12px 0;
+                    background: rgba(99, 102, 241, 0.12);
+                    border-radius: 10px;
+                    border: 1px solid rgba(99, 102, 241, 0.25);">
+            <div style="font-size: 10px; color: #94a3b8; letter-spacing: 1.5px;">
+                SIGNED IN AS
+            </div>
+            <div style="font-size: 13px; font-weight: 700; margin-top: 3px;">
+                {USER_NAME}
+            </div>
+            <div style="font-size: 10px; color: #818cf8; margin-top: 2px;
+                        text-transform: uppercase; letter-spacing: 1.5px;">
+                {USER_ROLE}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
     )
+
+    if st.button("Logout", use_container_width=True, key="logout_btn"):
+        logout_user()
+
+    st.markdown("---")
+
+    allowed_modules = ROLE_MODULES.get(USER_ROLE, ROLE_MODULES["manager"])
+
+    page = st.radio("MODULES", allowed_modules)
 
     st.markdown("---")
     if st.button("Refresh Data", use_container_width=True):
@@ -1852,33 +2019,6 @@ if page == "Executive Dashboard":
         else:
             empty_state("No item data.")
 
-    ch5, ch6 = st.columns(2)
-    with ch5:
-        st.subheader("Items by Diameter")
-        if not items.empty and "Nominal_Diameter_mm" in items.columns:
-            ddf = (items["Nominal_Diameter_mm"].fillna("Unknown")
-                   .value_counts().head(15)
-                   .rename_axis("Diameter").reset_index(name="Count"))
-            ddf["Diameter"] = ddf["Diameter"].astype(str)
-            fig = px.bar(ddf, x="Diameter", y="Count", text_auto=True)
-            fig.update_layout(xaxis_tickangle=-30)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            empty_state("No item data.")
-
-    with ch6:
-        st.subheader("Items by Application")
-        if not items.empty and "Application" in items.columns:
-            adf = (items["Application"].fillna("Unknown")
-                   .value_counts().head(10)
-                   .rename_axis("Application").reset_index(name="Count"))
-            adf["Application"] = adf["Application"].astype(str)
-            fig = px.bar(adf, x="Application", y="Count", text_auto=True)
-            fig.update_layout(xaxis_tickangle=-30)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            empty_state("No item data.")
-
     st.markdown("---")
     st.subheader("Stock Ledger")
     if not STOCK_LEDGER.empty:
@@ -1905,23 +2045,40 @@ elif page == "Item Registration":
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
+        section_title("New Item Entry", "Fields marked with * are required")
+
         next_item_id = next_id_for(ITEM_TABLE, items)
-        st.info(f"Next Item ID: {next_item_id}")
+
         with st.form("add_item_form"):
+            st.markdown("**Item Identity**")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.text_input("Item ID (Auto)", value=next_item_id, disabled=True)
+            with c2:
+                item_code = st.text_input("Item Code *")
+
+            st.markdown("**Specifications**")
             c1, c2, c3 = st.columns(3)
             with c1:
-                item_code = st.text_input("Item Code")
                 material_grade = st.text_input("Material Grade")
-                application = st.text_input("Application")
-            with c2:
                 diameter = st.text_input("Nominal Diameter (mm)")
+            with c2:
+                application = st.text_input("Application")
                 wall = st.text_input("Wall Thickness (mm)")
-                sdr = st.text_input("SDR")
             with c3:
+                sdr = st.text_input("SDR")
                 color = st.text_input("Color")
+
+            st.markdown("**Length & Unit**")
+            c1, c2 = st.columns(2)
+            with c1:
                 standard_length = st.text_input("Standard Length")
+            with c2:
                 unit = st.text_input("Unit", value="Meter")
-            submit = st.form_submit_button("Add Item", type="primary")
+
+            st.markdown("---")
+            submit = st.form_submit_button("Save Item", type="primary",
+                                            use_container_width=True)
 
         if submit:
             try:
@@ -1935,10 +2092,10 @@ elif page == "Item Registration":
                     "Standard_Length": standard_length.strip(),
                     "Unit": unit.strip()
                 }).execute()
-                st.success(f"Item {next_item_id} added.")
+                st.success(f"Item {next_item_id} saved.")
                 refresh_all()
             except Exception as e:
-                st.error(f"Failed: {str(e)}")
+                st.error(f"Save failed: {str(e)}")
 
     with tab3:
         if items.empty:
@@ -1951,6 +2108,8 @@ elif page == "Item Registration":
             def _v(col):
                 v = selected.get(col)
                 return str(v) if pd.notna(v) else ""
+
+            section_title("Edit Item", f"Item ID: {selected_id}")
 
             with st.form("update_item_form"):
                 c1, c2, c3 = st.columns(3)
@@ -1966,7 +2125,9 @@ elif page == "Item Registration":
                     new_color = st.text_input("Color", value=_v("Color"))
                     new_length = st.text_input("Standard Length", value=_v("Standard_Length"))
                     new_unit = st.text_input("Unit", value=_v("Unit"))
-                update = st.form_submit_button("Update Item", type="primary")
+                st.markdown("---")
+                update = st.form_submit_button("Update Item", type="primary",
+                                                use_container_width=True)
 
             if update:
                 try:
@@ -1983,7 +2144,7 @@ elif page == "Item Registration":
                     st.success("Item updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Update failed: {str(e)}")
 
             st.markdown("---")
             if st.button("Delete Item", type="secondary"):
@@ -1992,7 +2153,7 @@ elif page == "Item Registration":
                     st.success("Item deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Delete failed: {str(e)}")
 
 
 elif page == "Production":
@@ -2012,26 +2173,39 @@ elif page == "Production":
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
+        section_title("New Production Entry", "All fields marked with * are required")
+
         next_production_id = next_id_for(PRODUCTION_TABLE, production)
-        st.info(f"Next Production ID: {next_production_id}")
+
         if items.empty:
             st.warning("Add an item first.")
         else:
             options = get_item_options(items)
             with st.form("add_production_form"):
+                st.markdown("**Production Info**")
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    selected_item = st.selectbox("Item ID", options)
-                    production_date = st.date_input("Production Date", value=date.today())
-                    batch_no = st.text_input("Batch No")
+                    st.text_input("Production ID (Auto)", value=next_production_id, disabled=True)
+                    selected_item = st.selectbox("Item ID *", options)
                 with c2:
-                    production_line = st.selectbox("Production Line", PRODUCTION_LINES)
-                    planned_qty = st.number_input("Planned Quantity (m)", min_value=1, value=1, step=1)
-                    good_qty = st.number_input("Good Quantity (m)", min_value=0, value=0, step=1)
+                    production_date = st.date_input("Production Date *", value=date.today())
+                    batch_no = st.text_input("Batch No")
                 with c3:
-                    rejected_qty = st.number_input("Rejected Quantity (m)", min_value=0, value=0, step=1)
-                    status = st.selectbox("Production Status", PRODUCTION_STATUSES)
-                submit = st.form_submit_button("Add Production", type="primary")
+                    production_line = st.selectbox("Production Line *", PRODUCTION_LINES)
+                    status = st.selectbox("Production Status *", PRODUCTION_STATUSES)
+
+                st.markdown("**Quantities (m)**")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    planned_qty = st.number_input("Planned Quantity *", min_value=1, value=1, step=1)
+                with c2:
+                    good_qty = st.number_input("Good Quantity", min_value=0, value=0, step=1)
+                with c3:
+                    rejected_qty = st.number_input("Rejected Quantity", min_value=0, value=0, step=1)
+
+                st.markdown("---")
+                submit = st.form_submit_button("Save Production", type="primary",
+                                                use_container_width=True)
 
             if submit:
                 try:
@@ -2044,10 +2218,10 @@ elif page == "Production":
                         "Planned_Qty_m": planned_qty, "Good_Qty_m": good_qty,
                         "Rejected_Qty_m": rejected_qty, "Production_Status": status
                     }).execute()
-                    st.success(f"Production {next_production_id} added.")
+                    st.success(f"Production {next_production_id} saved.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Save failed: {str(e)}")
 
     with tab3:
         if production.empty:
@@ -2060,6 +2234,8 @@ elif page == "Production":
 
             current_line = str(selected["Production_Line"]) if pd.notna(selected["Production_Line"]) else PRODUCTION_LINES[0]
             line_idx = PRODUCTION_LINES.index(current_line) if current_line in PRODUCTION_LINES else 0
+
+            section_title("Edit Production", f"Production ID: {selected_id}")
 
             with st.form("update_production_form"):
                 c1, c2, c3 = st.columns(3)
@@ -2079,7 +2255,9 @@ elif page == "Production":
                     si = PRODUCTION_STATUSES.index(cs) if cs in PRODUCTION_STATUSES else 0
                     edit_status = st.selectbox("Production Status",
                                                PRODUCTION_STATUSES, index=si)
-                update = st.form_submit_button("Update Production", type="primary")
+                st.markdown("---")
+                update = st.form_submit_button("Update Production", type="primary",
+                                                use_container_width=True)
 
             if update:
                 try:
@@ -2089,19 +2267,19 @@ elif page == "Production":
                         "Rejected_Qty_m": edit_rejected,
                         "Production_Status": edit_status
                     }).eq("Production_ID", selected_id).execute()
-                    st.success("Updated.")
+                    st.success("Production updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Update failed: {str(e)}")
 
             if st.button("Delete Production"):
                 try:
                     supabase.table(PRODUCTION_TABLE).delete().eq(
                         "Production_ID", selected_id).execute()
-                    st.success("Deleted.")
+                    st.success("Production deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Delete failed: {str(e)}")
 
 
 elif page == "Stock Control":
@@ -2147,8 +2325,10 @@ elif page == "Stock Adjustment":
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
+        section_title("New Stock Adjustment", "All fields marked with * are required")
+
         next_adj_id = next_id_for(ADJUSTMENT_TABLE, adjustment)
-        st.info(f"Next Adjustment ID: {next_adj_id}")
+
         if items.empty:
             st.warning("Add an item first.")
         else:
@@ -2156,14 +2336,18 @@ elif page == "Stock Adjustment":
             with st.form("add_adjustment_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
-                    selected_item = st.selectbox("Item ID", options)
-                    adj_date = st.date_input("Adjustment Date", value=date.today())
+                    st.text_input("Adjustment ID (Auto)", value=next_adj_id, disabled=True)
+                    selected_item = st.selectbox("Item ID *", options)
+                    adj_date = st.date_input("Adjustment Date *", value=date.today())
                 with c2:
-                    qty = st.number_input("Quantity (+/-)", value=0.0, step=1.0)
-                    reason = st.selectbox("Reason", ADJUSTMENT_REASONS)
+                    qty = st.number_input("Quantity (+/-) *", value=0.0, step=1.0)
+                    reason = st.selectbox("Reason *", ADJUSTMENT_REASONS)
                 with c3:
                     remarks = st.text_area("Remarks", height=100)
-                submit = st.form_submit_button("Add Adjustment", type="primary")
+
+                st.markdown("---")
+                submit = st.form_submit_button("Save Adjustment", type="primary",
+                                                use_container_width=True)
 
             if submit:
                 try:
@@ -2172,10 +2356,10 @@ elif page == "Stock Adjustment":
                         "Adjustment_Date": date_str(adj_date), "Qty": qty,
                         "Reason": reason, "Remarks": remarks.strip()
                     }).execute()
-                    st.success(f"Adjustment {next_adj_id} added.")
+                    st.success(f"Adjustment {next_adj_id} saved.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Save failed: {str(e)}")
 
     with tab3:
         if adjustment.empty:
@@ -2197,6 +2381,8 @@ elif page == "Stock Adjustment":
                 except Exception:
                     pass
 
+            section_title("Edit Adjustment", f"Adjustment ID: {selected_id}")
+
             with st.form("update_adjustment_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
@@ -2213,7 +2399,9 @@ elif page == "Stock Adjustment":
                     em = st.text_area("Remarks",
                         value=str(selected["Remarks"]) if pd.notna(selected["Remarks"]) else "",
                         height=100)
-                update = st.form_submit_button("Update", type="primary")
+                st.markdown("---")
+                update = st.form_submit_button("Update", type="primary",
+                                                use_container_width=True)
 
             if update:
                 try:
@@ -2224,7 +2412,7 @@ elif page == "Stock Adjustment":
                     st.success("Updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Update failed: {str(e)}")
 
             if st.button("Delete Adjustment", type="secondary"):
                 try:
@@ -2233,7 +2421,7 @@ elif page == "Stock Adjustment":
                     st.success("Deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Delete failed: {str(e)}")
 
 
 elif page == "Physical Check":
@@ -2249,7 +2437,8 @@ elif page == "Physical Check":
         "Adjusted": "System_Adjusted", "Closing": "System_Closing",
     })
 
-    st.subheader("Enter Physical Counts")
+    section_title("Enter Physical Counts", "Enter physical quantity for each item")
+
     with st.form("physical_check_form"):
         counts = {}
         for _, row in ledger.iterrows():
@@ -2267,7 +2456,7 @@ elif page == "Physical Check":
                                               value=sc, step=1.0, key=f"pc_{iid}")
             st.markdown("---")
         submit = st.form_submit_button("Save Differences as Adjustments",
-                                       type="primary")
+                                       type="primary", use_container_width=True)
 
     if submit:
         today = date.today()
@@ -2407,10 +2596,11 @@ elif page == "Delivery Challan":
         next_no_dc = next_challan_no(challans, "DC")
         st.info(f"Next Challan No: {next_no_dc}")
 
+        section_title("Customer Details", "All fields marked with * are required")
         c1, c2, c3 = st.columns(3)
         with c1:
-            cd_dc = st.date_input("Challan Date", value=date.today(), key="cd_dc")
-            cn_dc = st.text_input("Customer Name", key="cn_dc")
+            cd_dc = st.date_input("Challan Date *", value=date.today(), key="cd_dc")
+            cn_dc = st.text_input("Customer Name *", key="cn_dc")
             cdt_dc = st.text_input("Contact Detail", key="cdt_dc")
         with c2:
             pj_dc = st.text_input("Project", key="pj_dc")
@@ -2423,11 +2613,12 @@ elif page == "Delivery Challan":
             sb_dc = st.text_input("Sent By", key="sb_dc")
 
         st.markdown("---")
-        st.markdown("#### Items")
+        section_title("Items", "Add items to challan")
         item_rows_dc = challan_items_editor("create_dc")
 
         st.markdown("---")
-        if st.button("Create Challan", type="primary", key="create_btn_dc"):
+        if st.button("Save Delivery Challan", type="primary",
+                     key="create_btn_dc", use_container_width=True):
             if not cn_dc.strip():
                 st.error("Customer Name required.")
             else:
@@ -2473,7 +2664,7 @@ elif page == "Delivery Challan":
                             reset_challan_rows("create_dc")
                             refresh_all()
                     except Exception as e:
-                        st.error(f"Failed: {str(e)}")
+                        st.error(f"Save failed: {str(e)}")
 
     with tab3:
         if challans.empty:
@@ -2488,6 +2679,8 @@ elif page == "Delivery Challan":
             def _v_dc(col):
                 v = sel_row_dc.get(col)
                 return str(v) if pd.notna(v) else ""
+
+            section_title("Edit Challan Header", f"Challan: {sel_no_dc}")
 
             with st.form("upd_dc_form"):
                 c1, c2, c3 = st.columns(3)
@@ -2510,7 +2703,9 @@ elif page == "Delivery Challan":
                     evn_dc = st.text_input("Vehicle No", value=_v_dc("vehicle_no"), key="evn_dc")
                     erb_dc = st.text_input("Received By", value=_v_dc("received_by"), key="erb_dc")
                     esb_dc = st.text_input("Sent By", value=_v_dc("sent_by"), key="esb_dc")
-                upd_dc = st.form_submit_button("Update Header", type="primary")
+                st.markdown("---")
+                upd_dc = st.form_submit_button("Update Header", type="primary",
+                                                use_container_width=True)
 
             if upd_dc:
                 try:
@@ -2529,7 +2724,7 @@ elif page == "Delivery Challan":
                     st.success("Updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Update failed: {str(e)}")
 
             if st.button("Delete Challan", type="secondary", key="del_dc"):
                 try:
@@ -2539,7 +2734,7 @@ elif page == "Delivery Challan":
                     st.success("Deleted and stock reversed.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Delete failed: {str(e)}")
 
 
 elif page == "Return Challan":
@@ -2638,10 +2833,11 @@ elif page == "Return Challan":
         next_no_rc = next_challan_no(return_challans, "RC")
         st.info(f"Next Challan No: {next_no_rc}")
 
+        section_title("Customer Details", "All fields marked with * are required")
         c1, c2, c3 = st.columns(3)
         with c1:
-            cd_rc = st.date_input("Challan Date", value=date.today(), key="cd_rc")
-            cn_rc = st.text_input("Customer Name", key="cn_rc")
+            cd_rc = st.date_input("Challan Date *", value=date.today(), key="cd_rc")
+            cn_rc = st.text_input("Customer Name *", key="cn_rc")
             cdt_rc = st.text_input("Contact Detail", key="cdt_rc")
         with c2:
             pj_rc = st.text_input("Project", key="pj_rc")
@@ -2654,11 +2850,12 @@ elif page == "Return Challan":
             sb_rc = st.text_input("Sent By", key="sb_rc")
 
         st.markdown("---")
-        st.markdown("#### Items")
+        section_title("Items", "Add items to challan")
         item_rows_rc = challan_items_editor("create_rc")
 
         st.markdown("---")
-        if st.button("Create Challan", type="primary", key="create_btn_rc"):
+        if st.button("Save Return Challan", type="primary",
+                     key="create_btn_rc", use_container_width=True):
             if not cn_rc.strip():
                 st.error("Customer Name required.")
             else:
@@ -2704,7 +2901,7 @@ elif page == "Return Challan":
                             reset_challan_rows("create_rc")
                             refresh_all()
                     except Exception as e:
-                        st.error(f"Failed: {str(e)}")
+                        st.error(f"Save failed: {str(e)}")
 
     with tab3:
         if return_challans.empty:
@@ -2719,6 +2916,8 @@ elif page == "Return Challan":
             def _v_rc(col):
                 v = sel_row_rc.get(col)
                 return str(v) if pd.notna(v) else ""
+
+            section_title("Edit Challan Header", f"Challan: {sel_no_rc}")
 
             with st.form("upd_rc_form"):
                 c1, c2, c3 = st.columns(3)
@@ -2741,7 +2940,9 @@ elif page == "Return Challan":
                     evn_rc = st.text_input("Vehicle No", value=_v_rc("vehicle_no"), key="evn_rc")
                     erb_rc = st.text_input("Received By", value=_v_rc("received_by"), key="erb_rc")
                     esb_rc = st.text_input("Sent By", value=_v_rc("sent_by"), key="esb_rc")
-                upd_rc = st.form_submit_button("Update Header", type="primary")
+                st.markdown("---")
+                upd_rc = st.form_submit_button("Update Header", type="primary",
+                                                use_container_width=True)
 
             if upd_rc:
                 try:
@@ -2760,7 +2961,7 @@ elif page == "Return Challan":
                     st.success("Updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Update failed: {str(e)}")
 
             if st.button("Delete Challan", type="secondary", key="del_rc"):
                 try:
@@ -2770,7 +2971,7 @@ elif page == "Return Challan":
                     st.success("Deleted and stock reversed.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Delete failed: {str(e)}")
 
 
 elif page == "Invoice":
@@ -2869,10 +3070,11 @@ elif page == "Invoice":
         next_no_inv = next_invoice_no(invoices)
         st.info(f"Next Invoice No: {next_no_inv}")
 
+        section_title("Invoice Details")
         c1, c2, c3 = st.columns(3)
         with c1:
-            inv_date = st.date_input("Invoice Date", value=date.today(), key="inv_date")
-            inv_customer = st.text_input("Customer Name", key="inv_cn")
+            inv_date = st.date_input("Invoice Date *", value=date.today(), key="inv_date")
+            inv_customer = st.text_input("Customer Name *", key="inv_cn")
             inv_contact = st.text_input("Contact Detail", key="inv_cd")
         with c2:
             inv_sales_head = st.text_input("Sales Head", key="inv_sh")
@@ -2897,7 +3099,8 @@ elif page == "Invoice":
                                                value=0.0, step=0.01,
                                                format="%.2f", key="inv_out")
 
-        st.markdown("#### Signature Fields")
+        st.markdown("---")
+        section_title("Signature Fields")
         csig1, csig2, csig3 = st.columns(3)
         with csig1:
             inv_prepared_by = st.text_input("Prepared By", key="inv_prep")
@@ -2909,7 +3112,7 @@ elif page == "Invoice":
         inv_remarks = st.text_area("Remarks", height=70, key="inv_remarks")
 
         st.markdown("---")
-        st.markdown("#### Items")
+        section_title("Items", "Add items to invoice")
         item_rows_inv = invoice_items_editor("create_inv")
 
         items_total = sum(
@@ -2921,7 +3124,8 @@ elif page == "Invoice":
                 f"Bill: Rs. {auto_bill:,.2f}")
 
         st.markdown("---")
-        if st.button("Create Invoice", type="primary", key="create_btn_inv"):
+        if st.button("Save Invoice", type="primary",
+                     key="create_btn_inv", use_container_width=True):
             if not inv_customer.strip():
                 st.error("Customer Name required.")
             else:
@@ -2969,7 +3173,7 @@ elif page == "Invoice":
                             reset_invoice_rows("create_inv")
                             refresh_all()
                     except Exception as e:
-                        st.error(f"Failed: {str(e)}")
+                        st.error(f"Save failed: {str(e)}")
 
     with tab3:
         if invoices.empty:
@@ -2984,6 +3188,8 @@ elif page == "Invoice":
             def _v_inv(col):
                 v = sel_row_inv.get(col)
                 return str(v) if pd.notna(v) else ""
+
+            section_title("Edit Invoice Header", f"Invoice: {sel_no_inv}")
 
             with st.form("upd_inv_form"):
                 c1, c2, c3 = st.columns(3)
@@ -3017,6 +3223,7 @@ elif page == "Invoice":
                         value=float(sel_row_inv.get("outstanding", 0) or 0),
                         step=0.01, format="%.2f", key="eout_inv")
 
+                st.markdown("**Signature Fields**")
                 cs1, cs2, cs3 = st.columns(3)
                 with cs1:
                     eprep = st.text_input("Prepared By", value=_v_inv("prepared_by"), key="eprep_inv")
@@ -3026,7 +3233,9 @@ elif page == "Invoice":
                     eauth = st.text_input("Authorized Signatory", value=_v_inv("authorized_signatory"), key="eauth_inv")
 
                 erem_inv = st.text_area("Remarks", value=_v_inv("remarks"), height=70, key="erem_inv")
-                upd_inv = st.form_submit_button("Update Invoice", type="primary")
+                st.markdown("---")
+                upd_inv = st.form_submit_button("Update Invoice", type="primary",
+                                                 use_container_width=True)
 
             if upd_inv:
                 try:
@@ -3049,7 +3258,7 @@ elif page == "Invoice":
                     st.success("Updated.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Update failed: {str(e)}")
 
             if st.button("Delete Invoice", type="secondary", key="del_inv"):
                 try:
@@ -3058,7 +3267,7 @@ elif page == "Invoice":
                     st.success("Deleted.")
                     refresh_all()
                 except Exception as e:
-                    st.error(f"Failed: {str(e)}")
+                    st.error(f"Delete failed: {str(e)}")
 
 
 elif page == "Analytics":
@@ -3071,7 +3280,6 @@ elif page == "Analytics":
                 out[c] = pd.to_numeric(out[c], errors="coerce").fillna(0)
         return out
 
-    # 1. Production
     st.subheader("Production Performance")
     if not production.empty:
         c1, c2, c3, c4 = st.columns(4)
@@ -3086,9 +3294,8 @@ elif page == "Analytics":
                    .value_counts().rename_axis("Status").reset_index(name="Count"))
             sdf["Status"] = sdf["Status"].astype(str)
             fig = px.pie(sdf, names="Status", values="Count", hole=0.5,
-                         title="Production Status Breakdown")
+                         title="Production Status")
             st.plotly_chart(fig, use_container_width=True)
-
         with cp2:
             try:
                 pdf = production.copy()
@@ -3107,22 +3314,11 @@ elif page == "Analytics":
                     st.plotly_chart(fig, use_container_width=True)
             except Exception:
                 pass
-
-        if "Production_Line" in production.columns:
-            mdf2 = _to_num(production, ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"])
-            mdf2["Production_Line"] = mdf2["Production_Line"].astype(str)
-            grp = mdf2.groupby("Production_Line", as_index=False)[
-                ["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"]].sum()
-            fig = px.bar(grp, x="Production_Line",
-                         y=["Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"],
-                         barmode="group", title="Production by Machine")
-            st.plotly_chart(fig, use_container_width=True)
     else:
         empty_state("No production data.")
 
     st.markdown("---")
 
-    # 2. Stock
     st.subheader("Stock Ledger Overview")
     if not STOCK_LEDGER.empty:
         c1, c2, c3, c4 = st.columns(4)
@@ -3146,90 +3342,6 @@ elif page == "Analytics":
 
     st.markdown("---")
 
-    # 3. Dispatch vs Return
-    st.subheader("Dispatch vs Return Trend")
-    if not dispatch.empty or not return_qty.empty:
-        disp_df = dispatch.copy()
-        ret_df = return_qty.copy()
-
-        if not disp_df.empty:
-            disp_df = _to_num(disp_df, ["Qty"])
-            if "Entry_Date" in disp_df.columns:
-                disp_df["Date"] = pd.to_datetime(disp_df["Entry_Date"], errors="coerce")
-        if not ret_df.empty:
-            ret_df = _to_num(ret_df, ["Qty"])
-            if "Entry_Date" in ret_df.columns:
-                ret_df["Date"] = pd.to_datetime(ret_df["Entry_Date"], errors="coerce")
-
-        disp_monthly = pd.DataFrame(columns=["Month", "Dispatched"])
-        ret_monthly = pd.DataFrame(columns=["Month", "Returned"])
-
-        if not disp_df.empty and "Date" in disp_df.columns:
-            d1 = disp_df.dropna(subset=["Date"]).copy()
-            if not d1.empty:
-                d1["Month"] = d1["Date"].dt.to_period("M").astype(str)
-                disp_monthly = d1.groupby("Month", as_index=False)["Qty"].sum()
-                disp_monthly.columns = ["Month", "Dispatched"]
-
-        if not ret_df.empty and "Date" in ret_df.columns:
-            r1 = ret_df.dropna(subset=["Date"]).copy()
-            if not r1.empty:
-                r1["Month"] = r1["Date"].dt.to_period("M").astype(str)
-                ret_monthly = r1.groupby("Month", as_index=False)["Qty"].sum()
-                ret_monthly.columns = ["Month", "Returned"]
-
-        if not disp_monthly.empty or not ret_monthly.empty:
-            merged = pd.merge(disp_monthly, ret_monthly,
-                              on="Month", how="outer").fillna(0)
-            merged["Month"] = merged["Month"].astype(str)
-            merged = _to_num(merged, ["Dispatched", "Returned"])
-            fig = px.bar(merged, x="Month", y=["Dispatched", "Returned"],
-                         barmode="group", title="Monthly Dispatch vs Return")
-            st.plotly_chart(fig, use_container_width=True)
-
-        if not disp_df.empty:
-            top = disp_df.groupby("Item_ID", as_index=False)["Qty"].sum()
-            top["Item_ID"] = top["Item_ID"].astype(str)
-            top = _to_num(top, ["Qty"]).sort_values("Qty", ascending=False).head(10)
-            fig = px.bar(top, x="Item_ID", y="Qty",
-                         title="Top 10 Dispatched Items", text_auto=True)
-            st.plotly_chart(fig, use_container_width=True)
-    else:
-        empty_state("No dispatch/return data.")
-
-    st.markdown("---")
-
-    # 4. Challan Summary
-    st.subheader("Challan Summary")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Delivery Challans", len(challans))
-    c2.metric("DC Items", len(challan_items))
-    c3.metric("Return Challans", len(return_challans))
-    c4.metric("RC Items", len(return_challan_items))
-
-    challan_concat = []
-    if not challans.empty:
-        d1 = challans[["challan_date"]].copy(); d1["Type"] = "Delivery"
-        challan_concat.append(d1)
-    if not return_challans.empty:
-        d2 = return_challans[["challan_date"]].copy(); d2["Type"] = "Return"
-        challan_concat.append(d2)
-
-    if challan_concat:
-        cdf = pd.concat(challan_concat, ignore_index=True)
-        cdf["challan_date"] = pd.to_datetime(cdf["challan_date"], errors="coerce")
-        cdf = cdf.dropna(subset=["challan_date"])
-        if not cdf.empty:
-            cdf["Month"] = cdf["challan_date"].dt.to_period("M").astype(str)
-            monthly = cdf.groupby(["Month", "Type"]).size().reset_index(name="Count")
-            if not monthly.empty:
-                fig = px.bar(monthly, x="Month", y="Count", color="Type",
-                             barmode="group", title="Challans per Month")
-                st.plotly_chart(fig, use_container_width=True)
-
-    st.markdown("---")
-
-    # 5. Invoice
     st.subheader("Invoice & Finance Analytics")
     if not invoices.empty:
         inv = invoices.copy()
@@ -3257,51 +3369,8 @@ elif page == "Analytics":
                           y=["Billed", "Received", "Outstanding"],
                           markers=True, title="Monthly Billing Trend")
             st.plotly_chart(fig, use_container_width=True)
-
-        if "payment_mode" in inv.columns:
-            pdf = inv["payment_mode"].fillna("Unknown").value_counts().reset_index()
-            pdf.columns = ["Payment_Mode", "Count"]
-            pdf["Payment_Mode"] = pdf["Payment_Mode"].astype(str)
-            fig = px.pie(pdf, names="Payment_Mode", values="Count",
-                         hole=0.5, title="Payment Mode Distribution")
-            st.plotly_chart(fig, use_container_width=True)
-
-        if "customer_name" in inv.columns:
-            top = inv.groupby("customer_name", as_index=False).agg(
-                Billed=("current_bill_amt", "sum"),
-                Outstanding=("outstanding", "sum")
-            ).sort_values("Billed", ascending=False).head(10)
-            top["customer_name"] = top["customer_name"].astype(str)
-            top = _to_num(top, ["Billed", "Outstanding"])
-            fig = px.bar(top, x="customer_name",
-                         y=["Billed", "Outstanding"],
-                         barmode="group", title="Top 10 Customers by Billing")
-            st.plotly_chart(fig, use_container_width=True)
     else:
         empty_state("No invoice data.")
-
-    st.markdown("---")
-
-    # 6. Stock Adjustment
-    st.subheader("Stock Adjustment Summary")
-    if not adjustment.empty:
-        adj_df = _to_num(adjustment, ["Qty"])
-
-        rs = adj_df.groupby("Reason", as_index=False)["Qty"].sum()
-        rs["Reason"] = rs["Reason"].astype(str)
-        rs = _to_num(rs, ["Qty"])
-        fig = px.bar(rs, x="Reason", y="Qty",
-                     title="Adjustments by Reason", text_auto=True)
-        st.plotly_chart(fig, use_container_width=True)
-
-        ia = adj_df.groupby("Item_ID", as_index=False)["Qty"].sum()
-        ia["Item_ID"] = ia["Item_ID"].astype(str)
-        ia = _to_num(ia, ["Qty"]).sort_values("Qty")
-        fig = px.bar(ia, x="Item_ID", y="Qty",
-                     title="Adjustments by Item")
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        empty_state("No stock adjustment data.")
 
 
 elif page == "Custom Charts":
