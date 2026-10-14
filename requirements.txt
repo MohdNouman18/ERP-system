@@ -5,4 +5,3 @@ supabase>=2.4
 python-dotenv>=1.0
 dash
 openpyxl
-requirements
