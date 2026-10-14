@@ -1,6 +1,7 @@
 import os
 import io
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 
 import pandas as pd
@@ -8,6 +9,7 @@ import plotly.express as px
 import plotly.io as pio
 import streamlit as st
 
+# Force light theme for all Plotly charts
 pio.templates.default = "plotly_white"
 from supabase import create_client, Client
 
@@ -69,8 +71,16 @@ CHALLAN_ITEMS_COLUMNS = (
     "challan_item_id", "challan_id", "sr_no",
     "item_id", "description", "quantity", "unit", "created_at"
 )
-RETURN_CHALLAN_COLUMNS = CHALLAN_COLUMNS
-RETURN_CHALLAN_ITEMS_COLUMNS = CHALLAN_ITEMS_COLUMNS
+RETURN_CHALLAN_COLUMNS = (
+    "challan_id", "challan_no", "challan_date",
+    "vehicle_no", "received_by", "sent_by",
+    "customer_name", "contact_detail", "project",
+    "location", "sales_head", "payment_terms", "created_at"
+)
+RETURN_CHALLAN_ITEMS_COLUMNS = (
+    "challan_item_id", "challan_id", "sr_no",
+    "item_id", "description", "quantity", "unit", "created_at"
+)
 INVOICE_COLUMNS = (
     "invoice_id", "invoice_no", "invoice_date", "customer_name",
     "contact_detail", "dc_id", "sales_head", "bank", "payment_mode",
@@ -95,7 +105,7 @@ ID_PREFIX = {
     ADJUSTMENT_TABLE:     ("Adjustment_ID",    "ADJ"),
 }
 
-CACHE_TTL = 1800  # 30 minutes instead of 5 to reduce refetches
+CACHE_TTL = 300
 PRODUCTION_LINES = ["Machine 01", "Machine 02", "Machine 03"]
 PRODUCTION_STATUSES = ["Completed", "In Progress", "Pending", "Rejected"]
 ADJUSTMENT_REASONS = ["Physical Check", "Damage", "Loss", "Found", "Other"]
@@ -115,26 +125,44 @@ COMPANY_ADDR_LINE3 = (
 )
 
 
+# =========================================================
+# ROLE â†’ MODULES MAPPING
+# =========================================================
+
 ROLE_MODULES = {
     "admin": [
-        "Executive Dashboard", "Item Registration",
-        "Bulk Import", "Data Management",
+        "Executive Dashboard",
+        "Item Registration",
+        "Bulk Import",
+        "Data Management",
     ],
     "accountant": [
-        "Executive Dashboard", "Delivery Challan",
-        "Return Challan", "Invoice", "Analytics",
+        "Executive Dashboard",
+        "Delivery Challan",
+        "Return Challan",
+        "Invoice",
+        "Analytics",
     ],
     "manager": [
-        "Executive Dashboard", "Item Registration", "Bulk Import",
-        "Production", "Stock Control", "Stock Adjustment",
-        "Physical Check", "Delivery Challan", "Return Challan",
-        "Invoice", "Analytics", "Custom Charts", "Data Management",
+        "Executive Dashboard",
+        "Item Registration",
+        "Bulk Import",
+        "Production",
+        "Stock Control",
+        "Stock Adjustment",
+        "Physical Check",
+        "Delivery Challan",
+        "Return Challan",
+        "Invoice",
+        "Analytics",
+        "Custom Charts",
+        "Data Management",
     ],
 }
 
 
 # =========================================================
-# OPTIMIZED CSS LOADING — inline style only after login
+# CSS
 # =========================================================
 
 @st.cache_data(show_spinner=False)
@@ -146,8 +174,13 @@ def _read_css():
         return None
 
 
+_css = _read_css()
+if _css:
+    st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
+
+
 # =========================================================
-# SUPABASE (cached client only, no eager data load)
+# SUPABASE
 # =========================================================
 
 @st.cache_resource(show_spinner=False)
@@ -244,81 +277,70 @@ def today_str():
     return date.today().strftime("%Y-%m-%d")
 
 
-def _fetch_table(table_name, columns, num_cols=()):
-    """Fetch a single table. Cached per table so unused tables are never fetched."""
+def _fetch_raw(table_name):
     try:
         resp = supabase.table(table_name).select("*").execute()
-        df = make_df(resp.data or [], columns)
-        if num_cols:
-            df = convert_numeric(df, num_cols)
-        return df, None
+        return resp.data or [], None
     except Exception as e:
-        return pd.DataFrame(columns=list(columns)), str(e)
+        return [], str(e)
 
 
-# ---- Per-table cached loaders (only fetched when actually needed) ----
+def _process(cols, num_cols, records, err):
+    if err:
+        return pd.DataFrame(columns=list(cols)), err
+    df = make_df(records, cols)
+    if num_cols:
+        df = convert_numeric(df, num_cols)
+    return df, None
+
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_items():
-    return _fetch_table(ITEM_TABLE, ITEM_COLUMNS)
+def load_all_data():
+    specs = [
+        (ITEM_TABLE, ITEM_COLUMNS, ()),
+        (PRODUCTION_TABLE, PRODUCTION_COLUMNS,
+         ("Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m")),
+        (OPENING_TABLE, OPENING_COLUMNS, ("Qty",)),
+        (PRODUCTION_QTY_TABLE, PRODUCTION_QTY_COLUMNS, ("Qty",)),
+        (DISPATCH_TABLE, DISPATCH_COLUMNS, ("Qty",)),
+        (RETURN_TABLE, RETURN_COLUMNS, ("Qty",)),
+        (CLOSING_TABLE, CLOSING_COLUMNS, ("Qty",)),
+        (ADJUSTMENT_TABLE, ADJUSTMENT_COLUMNS, ("Qty",)),
+        (CHALLAN_TABLE, CHALLAN_COLUMNS, ()),
+        (CHALLAN_ITEMS_TABLE, CHALLAN_ITEMS_COLUMNS, ("quantity", "sr_no")),
+        (RETURN_CHALLAN_TABLE, RETURN_CHALLAN_COLUMNS, ()),
+        (RETURN_CHALLAN_ITEMS_TABLE, RETURN_CHALLAN_ITEMS_COLUMNS,
+         ("quantity", "sr_no")),
+        (INVOICE_TABLE, INVOICE_COLUMNS,
+         ("cartage", "amount_received", "current_bill_amt", "outstanding")),
+        (INVOICE_ITEMS_TABLE, INVOICE_ITEMS_COLUMNS,
+         ("quantity", "price_per_unit", "amount", "sr_no")),
+    ]
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_production():
-    return _fetch_table(PRODUCTION_TABLE, PRODUCTION_COLUMNS,
-                        ("Planned_Qty_m", "Good_Qty_m", "Rejected_Qty_m"))
+    with ThreadPoolExecutor(max_workers=len(specs)) as pool:
+        futures = [pool.submit(_fetch_raw, s[0]) for s in specs]
+        raw_results = [f.result() for f in futures]
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_opening():
-    return _fetch_table(OPENING_TABLE, OPENING_COLUMNS, ("Qty",))
+    results = [
+        _process(specs[i][1], specs[i][2], raw_results[i][0], raw_results[i][1])
+        for i in range(len(specs))
+    ]
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_prod_qty():
-    return _fetch_table(PRODUCTION_QTY_TABLE, PRODUCTION_QTY_COLUMNS, ("Qty",))
+    return tuple([r[0] for r in results] + [r[1] for r in results])
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_dispatch():
-    return _fetch_table(DISPATCH_TABLE, DISPATCH_COLUMNS, ("Qty",))
 
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_return():
-    return _fetch_table(RETURN_TABLE, RETURN_COLUMNS, ("Qty",))
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_closing():
-    return _fetch_table(CLOSING_TABLE, CLOSING_COLUMNS, ("Qty",))
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_adjustment():
-    return _fetch_table(ADJUSTMENT_TABLE, ADJUSTMENT_COLUMNS, ("Qty",))
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_challans():
-    return _fetch_table(CHALLAN_TABLE, CHALLAN_COLUMNS)
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_challan_items():
-    return _fetch_table(CHALLAN_ITEMS_TABLE, CHALLAN_ITEMS_COLUMNS,
-                        ("quantity", "sr_no"))
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_return_challans():
-    return _fetch_table(RETURN_CHALLAN_TABLE, RETURN_CHALLAN_COLUMNS)
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_return_challan_items():
-    return _fetch_table(RETURN_CHALLAN_ITEMS_TABLE,
-                        RETURN_CHALLAN_ITEMS_COLUMNS, ("quantity", "sr_no"))
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_invoices():
-    return _fetch_table(INVOICE_TABLE, INVOICE_COLUMNS,
-                        ("cartage", "amount_received",
-                         "current_bill_amt", "outstanding"))
-
-@st.cache_data(ttl=CACHE_TTL, show_spinner=False)
-def load_invoice_items():
-    return _fetch_table(INVOICE_ITEMS_TABLE, INVOICE_ITEMS_COLUMNS,
-                        ("quantity", "price_per_unit", "amount", "sr_no"))
+(
+    items, production,
+    opening, prod_qty, dispatch, return_qty, closing, adjustment,
+    challans, challan_items, return_challans, return_challan_items,
+    invoices, invoice_items,
+    items_err, production_err,
+    opening_err, prod_qty_err, dispatch_err, return_err,
+    closing_err, adjustment_err,
+    challans_err, challan_items_err,
+    return_challans_err, return_challan_items_err,
+    invoices_err, invoice_items_err
+) = load_all_data()
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
@@ -331,28 +353,35 @@ def build_item_lookup(items_df):
         if not iid:
             continue
         parts = []
-        for key in ("Material_Grade", "Nominal_Diameter_mm", "SDR", "Color"):
-            val = row.get(key)
+
+        def _add(val):
             if val is None:
-                continue
+                return
             try:
                 if pd.isna(val):
-                    continue
+                    return
             except Exception:
                 pass
             s = str(val).strip()
             if not s or s in ("-", "nan", "None", "null"):
-                continue
+                return
             parts.append(s)
+
+        _add(row.get("Material_Grade"))
+        _add(row.get("Nominal_Diameter_mm"))
+        _add(row.get("SDR"))
+        _add(row.get("Color"))
         lookup[iid] = " - ".join(parts)
     return lookup
 
 
-def auto_description(item_id, item_lookup=None):
+ITEM_LOOKUP = build_item_lookup(items)
+
+
+def auto_description(item_id):
     if not item_id or item_id == "(none)":
         return ""
-    lookup = item_lookup if item_lookup is not None else {}
-    return lookup.get(str(item_id), "")
+    return ITEM_LOOKUP.get(str(item_id), "")
 
 
 def get_next_id(df, id_col, prefix):
@@ -418,7 +447,7 @@ def auto_push_dispatch(challan_no, items_list, challan_date):
         resp = supabase.table(DISPATCH_TABLE).select("*").execute()
         current_df = make_df(resp.data or [], DISPATCH_COLUMNS)
     except Exception:
-        current_df = pd.DataFrame(columns=list(DISPATCH_COLUMNS))
+        current_df = dispatch.copy()
 
     inserted = 0
     errors = []
@@ -452,7 +481,7 @@ def auto_push_return(challan_no, items_list, challan_date):
         resp = supabase.table(RETURN_TABLE).select("*").execute()
         current_df = make_df(resp.data or [], RETURN_COLUMNS)
     except Exception:
-        current_df = pd.DataFrame(columns=list(RETURN_COLUMNS))
+        current_df = return_qty.copy()
 
     inserted = 0
     errors = []
@@ -527,6 +556,11 @@ def compute_stock_ledger(items_df, opening_df, prod_qty_df,
     return base
 
 
+STOCK_LEDGER = compute_stock_ledger(
+    items, opening, prod_qty, dispatch, return_qty, adjustment
+)
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def compute_totals(production, opening, prod_qty, dispatch,
                    return_qty, adjustment, stock_ledger):
@@ -548,6 +582,10 @@ def compute_totals(production, opening, prod_qty, dispatch,
     }
 
 
+TOTALS = compute_totals(production, opening, prod_qty, dispatch,
+                        return_qty, adjustment, STOCK_LEDGER)
+
+
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def get_item_options(items_df):
     if items_df.empty:
@@ -565,14 +603,18 @@ def get_dc_options(challans_df):
         d = fmt_date_only(row.get("challan_date", ""))
         cn = str(row.get("customer_name", "") or "")
         cid = row.get("challan_id")
-        label = f"{no} • {d} • {cn}"
+        label = f"{no} â€¢ {d} â€¢ {cn}"
         opts.append((label, cid))
     return opts
 
 
 def refresh_all():
-    """Clear all cached data so next access refetches."""
-    st.cache_data.clear()
+    load_all_data.clear()
+    get_item_options.clear()
+    compute_stock_ledger.clear()
+    compute_totals.clear()
+    build_item_lookup.clear()
+    get_dc_options.clear()
     st.rerun()
 
 
@@ -678,11 +720,6 @@ def logout_user():
 
 
 def render_login_page():
-    # Load CSS only for login page too (light, cached)
-    css = _read_css()
-    if css:
-        st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
-
     st.markdown("""
         <style>
         section.main > div { padding-top: 0rem; }
@@ -765,42 +802,8 @@ USER_ROLE = CURRENT_USER.get("role", "manager")
 USER_NAME = CURRENT_USER.get("full_name") or CURRENT_USER.get("username", "User")
 
 
-# ---- Lazy data loading (only after login) ----
-
-items, items_err = load_items()
-production, production_err = load_production()
-opening, opening_err = load_opening()
-prod_qty, prod_qty_err = load_prod_qty()
-dispatch, dispatch_err = load_dispatch()
-return_qty, return_err = load_return()
-closing, closing_err = load_closing()
-adjustment, adjustment_err = load_adjustment()
-challans, challans_err = load_challans()
-challan_items, challan_items_err = load_challan_items()
-return_challans, return_challans_err = load_return_challans()
-return_challan_items, return_challan_items_err = load_return_challan_items()
-invoices, invoices_err = load_invoices()
-invoice_items, invoice_items_err = load_invoice_items()
-
-ITEM_LOOKUP = build_item_lookup(items)
-STOCK_LEDGER = compute_stock_ledger(
-    items, opening, prod_qty, dispatch, return_qty, adjustment
-)
-TOTALS = compute_totals(production, opening, prod_qty, dispatch,
-                        return_qty, adjustment, STOCK_LEDGER)
-
-
 # =========================================================
-# LOGGED-IN CSS (heavy styles only after login)
-# =========================================================
-
-_css = _read_css()
-if _css:
-    st.markdown(f"<style>{_css}</style>", unsafe_allow_html=True)
-
-
-# =========================================================
-# LETTERHEAD / PRINT CSS
+# LETTERHEAD / PRINT CSS (unchanged)
 # =========================================================
 
 def _letterhead_block():
@@ -1003,7 +1006,7 @@ def build_challan_html(header_row, items_df, challan_title="DELIVERY CHALLAN"):
 """
 
 
-def build_invoice_html(header_row, items_df, challans_df):
+def build_invoice_html(header_row, items_df):
     invoice_no = header_row.get("invoice_no", "") or ""
     invoice_date = fmt_date_only(header_row.get("invoice_date", ""))
 
@@ -1023,9 +1026,9 @@ def build_invoice_html(header_row, items_df, challans_df):
     authorized_sig = _clean(header_row.get("authorized_signatory", ""))
     dc_id = header_row.get("dc_id")
     dc_no = ""
-    if dc_id is not None and challans_df is not None and not challans_df.empty:
+    if dc_id is not None and not challans.empty:
         try:
-            m = challans_df[challans_df["challan_id"] == dc_id]
+            m = challans[challans["challan_id"] == dc_id]
             if not m.empty:
                 dc_no = str(m.iloc[0].get("challan_no", ""))
         except Exception:
@@ -1202,10 +1205,6 @@ def build_printable_html_page(challan_html):
 </html>"""
 
 
-# =========================================================
-# SHARED UI COMPONENTS
-# =========================================================
-
 def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
     if load_error:
         st.error(f"Failed to load {label}: {load_error}")
@@ -1223,7 +1222,9 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
         st.caption(f"{len(display)} record(s)")
 
     with tab2:
-        section_title(f"New {label} Entry", "Fields marked with * are required")
+        section_title(f"New {label} Entry",
+                      f"Fields marked with * are required")
+
         next_id = next_id_for(table_name, df)
 
         with st.form(f"add_{table_name}_form"):
@@ -1239,6 +1240,7 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
             with c3:
                 entry_date = st.date_input("Entry Date *", value=date.today(),
                                            key=f"ad_{table_name}")
+
             st.markdown("---")
             submit = st.form_submit_button(f"Save {label}", type="primary",
                                             use_container_width=True)
@@ -1328,7 +1330,7 @@ def crud_stock_table(table_name, df, id_col, label, items_df, load_error=None):
                 st.error(f"Delete failed: {str(e)}")
 
 
-def challan_items_editor(key_prefix, items_df, item_lookup):
+def challan_items_editor(key_prefix):
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -1339,7 +1341,7 @@ def challan_items_editor(key_prefix, items_df, item_lookup):
         ]
         st.session_state[counter_key] = 1
 
-    item_options = get_item_options(items_df)
+    item_options = get_item_options(items)
     rows = st.session_state[state_key]
 
     hc1, hc2, hc3, hc4, hc5 = st.columns([0.5, 2, 4, 2, 2])
@@ -1369,10 +1371,10 @@ def challan_items_editor(key_prefix, items_df, item_lookup):
                 )
                 if new_val != cur:
                     row["item_id"] = new_val
-                    row["description"] = auto_description(new_val, item_lookup)
+                    row["description"] = auto_description(new_val)
                     try:
-                        if not items_df.empty and new_val != "(none)":
-                            m = items_df[items_df["Item_ID"].astype(str) == str(new_val)]
+                        if not items.empty and new_val != "(none)":
+                            m = items[items["Item_ID"].astype(str) == str(new_val)]
                             if not m.empty:
                                 u = m.iloc[0].get("Unit", "")
                                 if pd.notna(u) and str(u).strip():
@@ -1391,7 +1393,7 @@ def challan_items_editor(key_prefix, items_df, item_lookup):
 
         with c3:
             current_item = row.get("item_id", "(none)")
-            default_desc = row.get("description", "") or auto_description(current_item, item_lookup)
+            default_desc = row.get("description", "") or auto_description(current_item)
             row["description"] = st.text_input(
                 "Description", value=default_desc,
                 key=f"{key_prefix}_desc_{rid}_{current_item}",
@@ -1415,7 +1417,7 @@ def challan_items_editor(key_prefix, items_df, item_lookup):
                     label_visibility="collapsed"
                 )
             with c5b:
-                if st.button("✖", key=f"{key_prefix}_rm_{rid}"):
+                if st.button("âœ–", key=f"{key_prefix}_rm_{rid}"):
                     to_remove = idx
 
     if to_remove is not None:
@@ -1436,7 +1438,7 @@ def challan_items_editor(key_prefix, items_df, item_lookup):
     return st.session_state[state_key]
 
 
-def invoice_items_editor(key_prefix, items_df, item_lookup):
+def invoice_items_editor(key_prefix):
     state_key = f"{key_prefix}_rows"
     counter_key = f"{key_prefix}_counter"
 
@@ -1448,7 +1450,7 @@ def invoice_items_editor(key_prefix, items_df, item_lookup):
         ]
         st.session_state[counter_key] = 1
 
-    item_options = get_item_options(items_df)
+    item_options = get_item_options(items)
     rows = st.session_state[state_key]
 
     hc1, hc2, hc3, hc4, hc5, hc6, hc7 = st.columns([0.4, 1.8, 3.5, 1.5, 1.4, 1.5, 1.5])
@@ -1480,10 +1482,10 @@ def invoice_items_editor(key_prefix, items_df, item_lookup):
                 )
                 if new_val != cur:
                     row["item_id"] = new_val
-                    row["description"] = auto_description(new_val, item_lookup)
+                    row["description"] = auto_description(new_val)
                     try:
-                        if not items_df.empty and new_val != "(none)":
-                            m = items_df[items_df["Item_ID"].astype(str) == str(new_val)]
+                        if not items.empty and new_val != "(none)":
+                            m = items[items["Item_ID"].astype(str) == str(new_val)]
                             if not m.empty:
                                 u = m.iloc[0].get("Unit", "")
                                 if pd.notna(u) and str(u).strip():
@@ -1502,7 +1504,7 @@ def invoice_items_editor(key_prefix, items_df, item_lookup):
 
         with c3:
             current_item = row.get("item_id", "(none)")
-            default_desc = row.get("description", "") or auto_description(current_item, item_lookup)
+            default_desc = row.get("description", "") or auto_description(current_item)
             row["description"] = st.text_input(
                 "Description", value=default_desc,
                 key=f"{key_prefix}_desc_{rid}_{current_item}",
@@ -1543,7 +1545,7 @@ def invoice_items_editor(key_prefix, items_df, item_lookup):
                 f"color:#0b1220; font-size:13px;'>{auto_amt:,.2f}</div>",
                 unsafe_allow_html=True
             )
-            if st.button("✖", key=f"{key_prefix}_rm_{rid}"):
+            if st.button("âœ–", key=f"{key_prefix}_rm_{rid}"):
                 to_remove = idx
 
     if to_remove is not None:
@@ -2048,6 +2050,7 @@ elif page == "Item Registration":
 
     with tab2:
         section_title("New Item Entry", "Fields marked with * are required")
+
         next_item_id = next_id_for(ITEM_TABLE, items)
 
         with st.form("add_item_form"):
@@ -2175,6 +2178,7 @@ elif page == "Production":
 
     with tab2:
         section_title("New Production Entry", "All fields marked with * are required")
+
         next_production_id = next_id_for(PRODUCTION_TABLE, production)
 
         if items.empty:
@@ -2326,6 +2330,7 @@ elif page == "Stock Adjustment":
 
     with tab2:
         section_title("New Stock Adjustment", "All fields marked with * are required")
+
         next_adj_id = next_id_for(ADJUSTMENT_TABLE, adjustment)
 
         if items.empty:
@@ -2554,7 +2559,7 @@ elif page == "Delivery Challan":
                         no = str(row.get("challan_no", ""))
                         d = fmt_date_only(row.get("challan_date", ""))
                         cid = row.get("challan_id")
-                        label = f"{no}  •  {d}"
+                        label = f"{no}  â€¢  {d}"
                         options_display.append(label)
                         id_map[label] = cid
 
@@ -2613,7 +2618,7 @@ elif page == "Delivery Challan":
 
         st.markdown("---")
         section_title("Items", "Add items to challan")
-        item_rows_dc = challan_items_editor("create_dc", items, ITEM_LOOKUP)
+        item_rows_dc = challan_items_editor("create_dc")
 
         st.markdown("---")
         if st.button("Save Delivery Challan", type="primary",
@@ -2790,7 +2795,7 @@ elif page == "Return Challan":
                         no = str(row.get("challan_no", ""))
                         d = fmt_date_only(row.get("challan_date", ""))
                         cid = row.get("challan_id")
-                        label = f"{no}  •  {d}"
+                        label = f"{no}  â€¢  {d}"
                         options_display_rc.append(label)
                         id_map_rc[label] = cid
 
@@ -2850,7 +2855,7 @@ elif page == "Return Challan":
 
         st.markdown("---")
         section_title("Items", "Add items to challan")
-        item_rows_rc = challan_items_editor("create_rc", items, ITEM_LOOKUP)
+        item_rows_rc = challan_items_editor("create_rc")
 
         st.markdown("---")
         if st.button("Save Return Challan", type="primary",
@@ -3027,7 +3032,7 @@ elif page == "Invoice":
                         no = str(row.get("invoice_no", ""))
                         d = fmt_date_only(row.get("invoice_date", ""))
                         cid = row.get("invoice_id")
-                        label = f"{no}  •  {d}"
+                        label = f"{no}  â€¢  {d}"
                         options_display.append(label)
                         id_map[label] = cid
 
@@ -3041,7 +3046,7 @@ elif page == "Invoice":
 
                 with right_col:
                     st.markdown("#### Print / Download")
-                    html = build_invoice_html(picked_row, items_for, challans)
+                    html = build_invoice_html(picked_row, items_for)
                     c1, c2 = st.columns(2)
                     with c1:
                         printable = build_printable_html_page(html)
@@ -3112,7 +3117,7 @@ elif page == "Invoice":
 
         st.markdown("---")
         section_title("Items", "Add items to invoice")
-        item_rows_inv = invoice_items_editor("create_inv", items, ITEM_LOOKUP)
+        item_rows_inv = invoice_items_editor("create_inv")
 
         items_total = sum(
             float(r.get("quantity", 0)) * float(r.get("price_per_unit", 0))
